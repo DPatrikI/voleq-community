@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: MPL-2.0
+
+import AppKit
+import CoreAudio
+import SwiftUI
+import VolEqMacAudio
+
+@main
+@available(macOS 14.2, *)
+struct VolEqCommunityMacApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var audio = AudioCaptureController()
+
+    var body: some Scene {
+        WindowGroup("VolEq Community") {
+            ContentView(audio: audio)
+                .frame(width: 520)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(replacing: .newItem) { }
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
+@available(macOS 14.2, *)
+struct ContentView: View {
+    @ObservedObject var audio: AudioCaptureController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("VolEq — Volume Equilibrium")
+                .font(.largeTitle.weight(.semibold))
+            Text("Automatic voice-volume leveling for online meetings")
+                .foregroundStyle(.secondary)
+
+            Picker("Capture", selection: $audio.mode) {
+                ForEach(CaptureMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(audio.isRunning)
+
+            if audio.mode == .application {
+                HStack {
+                    Picker("Application", selection: $audio.selectedProcessID) {
+                        if audio.processes.isEmpty {
+                            Text("No active audio applications").tag(nil as AudioObjectID?)
+                        }
+                        ForEach(audio.processes) { process in
+                            Text(process.label).tag(process.id as AudioObjectID?)
+                        }
+                    }
+                    .disabled(audio.isRunning || audio.processes.isEmpty)
+
+                    Button("Refresh") {
+                        audio.refreshProcesses()
+                    }
+                    .disabled(audio.isRunning)
+                }
+            } else {
+                Text("Device-wide captures the current output mix. System alerts and every app except VolEq are included.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            HStack(alignment: .firstTextBaseline) {
+                Circle()
+                    .fill(audio.isRunning ? Color.green : Color.secondary)
+                    .frame(width: 9, height: 9)
+                Text(audio.status)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                Spacer()
+            }
+
+            Button(audio.isRunning ? "Stop Leveling" : "Start Leveling") {
+                audio.toggle()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!audio.isRunning && audio.mode == .application && audio.selectedProcessID == nil)
+
+            Text("VolEq uses a carefully chosen speech-leveling preset. Advanced controls and automation are planned for VolEq Premium.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(24)
+    }
+}

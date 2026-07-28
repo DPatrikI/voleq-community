@@ -1,0 +1,18 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Built applications and local evidence
+dist/
+artifacts/
+
+# Xcode and macOS
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible VolEq Community problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach private meeting recordings or sensitive logs.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the selected capture mode, audio-producing app, and output device.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "For example: macOS 14.6"
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: VolEq version or commit
+      placeholder: "For example: 0.1.0 or a commit hash"
+    validations:
+      required: true
+  - type: dropdown
+    id: output
+    attributes:
+      label: Output type
+      options:
+        - Built-in speakers
+        - Wired headphones or speakers
+        - Bluetooth or AirPods
+        - USB or other audio interface
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed private audio, credentials, and sensitive information.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

@@ -1,0 +1,54 @@
+#!/bin/zsh
+# SPDX-License-Identifier: MPL-2.0
+set -euo pipefail
+
+REPOSITORY_ROOT="${0:A:h}"
+COMMAND="${1:-help}"
+PLATFORM="${2:-}"
+
+source "$REPOSITORY_ROOT/scripts/lib/toolchain.zsh"
+
+usage() {
+    echo "Usage:"
+    echo "  ./dev doctor"
+    echo "  ./dev test"
+    echo "  ./dev build macos"
+    echo "  ./dev run macos"
+}
+
+require_macos() {
+    if [[ "$PLATFORM" != "macos" ]]; then
+        usage
+        exit 2
+    fi
+}
+
+case "$COMMAND" in
+    doctor)
+        voleq_validate_toolchain verbose
+        ;;
+    test)
+        cd "$REPOSITORY_ROOT"
+        "$REPOSITORY_ROOT/scripts/test-dev-doctor.zsh"
+        voleq_validate_toolchain quiet
+        env CLANG_MODULE_CACHE_PATH="$REPOSITORY_ROOT/.build/clang-module-cache" \
+            SWIFT_MODULECACHE_PATH="$REPOSITORY_ROOT/.build/swift-module-cache" \
+            "$VOLEQ_SWIFT_BINARY" test
+        ;;
+    build)
+        require_macos
+        "$REPOSITORY_ROOT/scripts/build-macos-app.sh"
+        ;;
+    run)
+        require_macos
+        "$REPOSITORY_ROOT/scripts/build-macos-app.sh"
+        open "$REPOSITORY_ROOT/dist/VolEq Community.app"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac
