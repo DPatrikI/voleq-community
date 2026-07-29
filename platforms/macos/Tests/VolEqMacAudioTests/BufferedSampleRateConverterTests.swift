@@ -114,7 +114,9 @@ final class BufferedSampleRateConverterTests: XCTestCase {
                 outputFrameCount: 512
             )
         )
-        XCTAssertTrue(output.allSatisfy { abs($0) > 0.12 })
+        let delayedSampleCount = 441 * 2
+        XCTAssertTrue(output.prefix(delayedSampleCount).allSatisfy { $0 == 0 })
+        XCTAssertTrue(output.dropFirst(delayedSampleCount).allSatisfy { abs($0) > 0.12 })
     }
 
     func testEqualFrameCountsOnDifferentClocksKeepSampleRateConversion() throws {
