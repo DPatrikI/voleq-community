@@ -4,7 +4,6 @@ import AppKit
 import CoreAudio
 import Foundation
 import VolEqCore
-import VolEqDSP
 
 public struct AudioProcess: Identifiable, Hashable {
     public let id: AudioObjectID
@@ -31,7 +30,7 @@ public final class AudioCaptureController: ObservableObject {
     @Published public var selectedProcessID: AudioObjectID?
     @Published public var mode: CaptureMode = .application
     @Published public var levelingSettings = LevelingSettings() {
-        didSet { processor?.updateSettings(levelingSettings) }
+        didSet { audioProcessor?.updateSettings(levelingSettings) }
     }
     @Published public private(set) var isRunning = false
     @Published public private(set) var status = "Choose an audio-producing app, then start."
@@ -39,14 +38,40 @@ public final class AudioCaptureController: ObservableObject {
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
-    private var processor: DynamicsProcessor?
+    private var audioProcessor: AudioIOProcessor?
+    private var activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
+    private var activeOutputListener: AudioObjectPropertyListenerBlock?
+    private var activeOutputListenerAddresses: [AudioObjectPropertyAddress] = []
+    private var defaultOutputListener: AudioObjectPropertyListenerBlock?
+    private var routeRecoveryTask: Task<Void, Never>?
+    private var processingDiagnosticsTask: Task<Void, Never>?
     private let ioQueue = DispatchQueue(
         label: "com.patrikistvandoczy.voleq.community.audio",
         qos: .userInteractive
     )
+    private let routeQueue = DispatchQueue(
+        label: "com.patrikistvandoczy.voleq.community.audio-route",
+        qos: .userInitiated
+    )
 
     public init() {
         refreshProcesses()
+        do {
+            try installDefaultOutputListener()
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    deinit {
+        guard let defaultOutputListener else { return }
+        var address = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            routeQueue,
+            defaultOutputListener
+        )
     }
 
     public func refreshProcesses() {
@@ -98,6 +123,12 @@ public final class AudioCaptureController: ObservableObject {
 
     public func start() {
         guard !isRunning else { return }
+        routeRecoveryTask?.cancel()
+        routeRecoveryTask = nil
+        startPipeline()
+    }
+
+    private func startPipeline() {
         stopResources()
 
         do {
@@ -106,6 +137,7 @@ public final class AudioCaptureController: ObservableObject {
                 objectID: outputDeviceID,
                 selector: kAudioDevicePropertyDeviceUID
             )
+            try installActiveOutputListeners(for: outputDeviceID)
 
             let description = CATapDescription()
             description.name = "VolEq Capture"
@@ -162,28 +194,35 @@ public final class AudioCaptureController: ObservableObject {
             )
             aggregateDeviceID = newAggregateID
 
-            let tapFormat: AudioStreamBasicDescription = try readValue(
-                objectID: tapID,
-                selector: kAudioTapPropertyFormat
+            // The I/O callback belongs to the aggregate device. Its input stream
+            // can already be rate-adjusted by Core Audio's tap drift compensation,
+            // so the tap's advertised format is not necessarily the format of
+            // `inputData`. Configuring another converter from the tap format can
+            // double-resample Bluetooth audio and produce metallic/robotic output.
+            let callbackInputFormat: AudioStreamBasicDescription = try readValue(
+                objectID: aggregateDeviceID,
+                selector: kAudioDevicePropertyStreamFormat,
+                scope: kAudioDevicePropertyScopeInput
             )
             let outputFormat: AudioStreamBasicDescription = try readValue(
                 objectID: aggregateDeviceID,
                 selector: kAudioDevicePropertyStreamFormat,
                 scope: kAudioDevicePropertyScopeOutput
             )
-            try validateFloat32(tapFormat, label: "Captured audio")
+            try validateFloat32(callbackInputFormat, label: "Captured audio")
             try validateFloat32(outputFormat, label: "Output device")
-            try validateSupportedChannelLayout(tapFormat, label: "Captured audio")
+            try validateSupportedChannelLayout(callbackInputFormat, label: "Captured audio")
             try validateSupportedChannelLayout(outputFormat, label: "Output device")
-            guard abs(tapFormat.mSampleRate - outputFormat.mSampleRate) < 1 else {
-                throw VolEqError.unsupportedFormat("The capture and output sample rates do not match.")
-            }
-
-            let processor = DynamicsProcessor(
-                sampleRate: tapFormat.mSampleRate,
+            let processor = try AudioIOProcessor(
+                inputFormat: callbackInputFormat,
+                outputFormat: outputFormat,
                 settings: levelingSettings
-            )
-            self.processor = processor
+            ) { [weak self] conversionStatus in
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleAudioConversionFailure(conversionStatus)
+                }
+            }
+            audioProcessor = processor
             var newIOProcID: AudioDeviceIOProcID?
             try requireNoErr(
                 AudioDeviceCreateIOProcIDWithBlock(
@@ -202,12 +241,18 @@ public final class AudioCaptureController: ObservableObject {
             )
 
             isRunning = true
+            let routeStatus = processor.usesSampleRateConversion
+                ? " Resolving route timing (\(Int(processor.inputSampleRate))→\(Int(processor.outputSampleRate)) Hz labels)…"
+                : ""
+            let runningStatus: String
             if mode == .application,
                let process = processes.first(where: { $0.id == selectedProcessID }) {
-                status = "Leveling \(process.name) on the current output device."
+                runningStatus = "Leveling \(process.name) on the current output device."
             } else {
-                status = "Leveling the device-wide mix. VolEq excludes itself to avoid feedback."
+                runningStatus = "Leveling the device-wide mix. VolEq excludes itself to avoid feedback."
             }
+            status = runningStatus + routeStatus
+            scheduleProcessingDiagnostics(for: processor, runningStatus: runningStatus)
         } catch {
             stopResources()
             isRunning = false
@@ -216,12 +261,17 @@ public final class AudioCaptureController: ObservableObject {
     }
 
     public func stop() {
+        routeRecoveryTask?.cancel()
+        routeRecoveryTask = nil
         stopResources()
         isRunning = false
         status = "Stopped. Original application audio is restored."
     }
 
     private func stopResources() {
+        processingDiagnosticsTask?.cancel()
+        processingDiagnosticsTask = nil
+        removeActiveOutputListeners()
         if aggregateDeviceID != kAudioObjectUnknown, let ioProcID {
             AudioDeviceStop(aggregateDeviceID, ioProcID)
             AudioDeviceDestroyIOProcID(aggregateDeviceID, ioProcID)
@@ -236,7 +286,162 @@ public final class AudioCaptureController: ObservableObject {
             AudioHardwareDestroyProcessTap(tapID)
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
-        processor = nil
+        audioProcessor = nil
+    }
+
+    private func scheduleProcessingDiagnostics(
+        for processor: AudioIOProcessor,
+        runningStatus: String
+    ) {
+        processingDiagnosticsTask?.cancel()
+        processingDiagnosticsTask = Task { @MainActor [weak self] in
+            for _ in 0..<20 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let self, !Task.isCancelled, self.audioProcessor === processor else {
+                    return
+                }
+                guard let diagnostics = processor.currentDiagnostics() else { continue }
+
+                switch diagnostics.path {
+                case .directAggregateClock:
+                    if processor.usesSampleRateConversion {
+                        self.status = runningStatus
+                            + " Core Audio synchronized this route "
+                            + "(\(diagnostics.inputFrameCount)→\(diagnostics.outputFrameCount) frames); "
+                            + "duplicate conversion is bypassed."
+                    } else {
+                        self.status = runningStatus
+                    }
+                case .sampleRateConverter:
+                    self.status = runningStatus
+                        + " Output conversion is active "
+                        + "(\(diagnostics.inputFrameCount)→\(diagnostics.outputFrameCount) callback frames; "
+                        + "\(Int(processor.inputSampleRate))→\(Int(processor.outputSampleRate)) Hz)."
+                }
+                self.processingDiagnosticsTask = nil
+                return
+            }
+            self?.processingDiagnosticsTask = nil
+        }
+    }
+
+    private func installDefaultOutputListener() throws {
+        guard defaultOutputListener == nil else { return }
+        var address = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.handleOutputRouteChange()
+            }
+        }
+        try requireNoErr(
+            AudioObjectAddPropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                routeQueue,
+                listener
+            ),
+            "Observe the default output device"
+        )
+        defaultOutputListener = listener
+    }
+
+    private func installActiveOutputListeners(for deviceID: AudioObjectID) throws {
+        removeActiveOutputListeners()
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.handleOutputRouteChange()
+            }
+        }
+        let addresses = [
+            propertyAddress(kAudioDevicePropertyDeviceIsAlive),
+            propertyAddress(kAudioDevicePropertyNominalSampleRate),
+            propertyAddress(
+                kAudioDevicePropertyStreamFormat,
+                scope: kAudioDevicePropertyScopeOutput
+            )
+        ]
+
+        var installed: [AudioObjectPropertyAddress] = []
+        do {
+            for var address in addresses {
+                try requireNoErr(
+                    AudioObjectAddPropertyListenerBlock(
+                        deviceID,
+                        &address,
+                        routeQueue,
+                        listener
+                    ),
+                    "Observe output-device changes"
+                )
+                installed.append(address)
+            }
+        } catch {
+            for var address in installed {
+                AudioObjectRemovePropertyListenerBlock(
+                    deviceID,
+                    &address,
+                    routeQueue,
+                    listener
+                )
+            }
+            throw error
+        }
+
+        activeOutputDeviceID = deviceID
+        activeOutputListener = listener
+        activeOutputListenerAddresses = installed
+    }
+
+    private func removeActiveOutputListeners() {
+        guard
+            activeOutputDeviceID != kAudioObjectUnknown,
+            let activeOutputListener
+        else {
+            activeOutputListenerAddresses.removeAll(keepingCapacity: true)
+            activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
+            return
+        }
+        for var address in activeOutputListenerAddresses {
+            AudioObjectRemovePropertyListenerBlock(
+                activeOutputDeviceID,
+                &address,
+                routeQueue,
+                activeOutputListener
+            )
+        }
+        activeOutputListenerAddresses.removeAll(keepingCapacity: true)
+        activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
+        self.activeOutputListener = nil
+    }
+
+    private func handleOutputRouteChange() {
+        guard isRunning else {
+            status = processes.isEmpty
+                ? "No app is producing audio yet. Start meeting audio, then refresh."
+                : "Ready. Audio will use the current default output device."
+            return
+        }
+
+        routeRecoveryTask?.cancel()
+        stopResources()
+        status = "The output device changed. Reconnecting safely…"
+        routeRecoveryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let self, !Task.isCancelled, self.isRunning else { return }
+            self.routeRecoveryTask = nil
+            self.startPipeline()
+        }
+    }
+
+    private func handleAudioConversionFailure(_ conversionStatus: OSStatus) {
+        guard isRunning else { return }
+        stopResources()
+        isRunning = false
+        let error = VolEqError.coreAudio(
+            operation: "Convert audio for the output device",
+            status: conversionStatus
+        )
+        status = "\(error.localizedDescription) Original audio was restored. Try starting again."
     }
 
 }

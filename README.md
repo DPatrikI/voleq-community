@@ -52,14 +52,16 @@ The application is assembled at `dist/VolEq Community.app`.
 
 On macOS 14.2+, VolEq uses Core Audio process taps to capture an application's outgoing audio, applies linked-stereo speech leveling, and sends the result to the current default output device. The original selected audio is muted only while VolEq is actively replacing it. Device-wide mode excludes VolEq itself to avoid a feedback loop.
 
+VolEq processes the aggregate device's actual callback cadence, including any drift compensation Core Audio already applies to a Bluetooth tap. When equal input/output callback periods show that Core Audio has synchronized the route, VolEq bypasses duplicate conversion even if the stream labels still advertise different nominal rates. When the frame cadence confirms that conversion remains necessary, VolEq converts the processed stream through Audio Converter Services with fixed-capacity real-time input and output FIFOs, so the device receives complete periods after a short pre-roll. It observes default-device, format, sample-rate, and device-availability changes and safely rebuilds the private audio path after a headset or output-route transition.
+
 No virtual audio driver or permanent system-wide output-device change is required.
 
 ## Current limitations
 
-- The output device is captured when leveling starts. Stop and restart after changing speakers or headphones.
+- Output changes trigger an automatic reconnect and can produce a brief silence while Core Audio settles the new route.
 - Only processes currently producing audio appear in the application selector.
-- The current path expects mono or stereo 32-bit floating-point PCM with matching input/output sample rates. Multichannel layouts fail safely before processing starts.
-- Bluetooth profile changes, meeting-app compatibility, CPU usage, latency, and long-running stability still need structured validation.
+- The current path supports mono or stereo 32-bit floating-point PCM and converts differing capture/output sample rates. Multichannel layouts fail safely before processing starts.
+- The Sennheiser HDB 630 and Apple AirPods Pro 2 have been physically validated in regular playback and call mode with their microphones active. Deterministic tests cover 48↔44.1 kHz and 48→16 kHz paths, but live profile switching while VolEq remains active, broader headset compatibility, meeting apps, CPU usage, latency, and long-running stability still need structured validation.
 - The current mixed-stream processor levels the combined incoming audio. It cannot identify individual meeting participants or keep a separate profile for each speaker.
 
 ## Repository map

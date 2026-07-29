@@ -9,8 +9,9 @@
 
 ## Validation before a public release
 
+- [Implemented; validated on Sennheiser HDB 630 and Apple AirPods Pro 2] Handle synchronized and converted headset paths in regular playback and call mode with the microphone active. Live profile switching while VolEq remains active and broader device coverage remain pending;
 - test real Teams, Zoom, Meet, and browser-based sessions;
-- test built-in speakers, wired output, AirPods, and other Bluetooth devices;
+- test wired output and additional Bluetooth devices;
 - test output switching, process disappearance, sleep/wake, and permission recovery;
 - measure CPU, latency, memory behavior, and long-running stability;
 - run repeatable loud/quiet speech fixtures and blind A/B listening checks;

@@ -9,6 +9,7 @@ This public repository provides a useful, buildable application with:
 - application or device-wide attachment;
 - an application selector and refresh action;
 - a single start/stop leveling control;
+- safe recovery when the active system output route or Bluetooth profile changes;
 - the maintained core algorithm and platform adapter;
 - command-line build and test workflows.
 
@@ -19,7 +20,7 @@ Community must remain genuinely useful and reliable. It is not a crippled demo, 
 The planned private repository may add separate proprietary files for:
 
 - advanced leveling controls;
-- automatic app and output-device switching;
+- automatic app selection, output-device preferences, and routing policies;
 - profiles and per-app preferences;
 - menu-bar and background workflows;
 - import, export, diagnostics, and guided recovery;

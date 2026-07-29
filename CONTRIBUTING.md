@@ -9,6 +9,17 @@ Thank you for helping improve VolEq. Focused bug reports, reproducible audio cas
 3. Do not include private meeting recordings, credentials, proprietary code, or material with unclear licensing.
 4. Keep Premium-only product features out of this public repository; see `docs/EDITIONS.md`.
 
+## Development workflow
+
+VolEq uses short-lived branches and pull requests. The `master` branch is protected, kept in a releasable state, and is not used for unfinished work.
+
+1. Create a focused branch from the latest `master`, using a descriptive prefix such as `feat/`, `fix/`, `docs/`, or `test/`.
+2. Keep commits reviewable and include the required Developer Certificate of Origin sign-off.
+3. Open a pull request into `master` and wait for the required CI checks to pass.
+4. Squash-merge the pull request and delete its source branch after the merge.
+
+Published releases are made from `master` and identified by Semantic Versioning tags such as `v0.1.0`. Tags identify release commits; they are not created for ordinary merges.
+
 ## Local checks
 
 ```sh
