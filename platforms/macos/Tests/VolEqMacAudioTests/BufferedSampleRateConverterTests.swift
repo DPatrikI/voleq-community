@@ -183,6 +183,63 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         XCTAssertTrue(output.contains { abs($0) > 0.01 })
     }
 
+    func testCloseNominalRatesResolveSynchronizedCallbacks() {
+        var analyzer = AudioCallbackCadenceAnalyzer(
+            inputSampleRate: 48_000,
+            outputSampleRate: 47_999
+        )
+        var resolution = AudioCadenceResolution.pending
+
+        for callback in 0..<4 {
+            resolution = analyzer.observe(
+                inputFrameCount: 480,
+                inputTime: hostTimestamp(UInt64(callback * 10_000_000)),
+                outputFrameCount: 480,
+                outputTime: hostTimestamp(UInt64(callback * 10_000_000))
+            )
+        }
+
+        XCTAssertEqual(resolution, .resolved(.directAggregateClock))
+    }
+
+    func testCloseNominalRatesResolveDistinctClocks() {
+        var analyzer = AudioCallbackCadenceAnalyzer(
+            inputSampleRate: 48_000,
+            outputSampleRate: 47_999
+        )
+        var resolution = AudioCadenceResolution.pending
+
+        for callback in 0..<4 {
+            resolution = analyzer.observe(
+                inputFrameCount: 480,
+                inputTime: hostTimestamp(UInt64(callback * 10_000_000)),
+                outputFrameCount: 480,
+                outputTime: hostTimestamp(UInt64(callback * 10_000_208))
+            )
+        }
+
+        XCTAssertEqual(resolution, .resolved(.sampleRateConverter))
+    }
+
+    func testCloseNominalRatesKeepAmbiguousCadencePending() {
+        var analyzer = AudioCallbackCadenceAnalyzer(
+            inputSampleRate: 48_000,
+            outputSampleRate: 47_999
+        )
+        var resolution = AudioCadenceResolution.pending
+
+        for callback in 0..<4 {
+            resolution = analyzer.observe(
+                inputFrameCount: 480,
+                inputTime: hostTimestamp(UInt64(callback * 10_000_000)),
+                outputFrameCount: 480,
+                outputTime: hostTimestamp(UInt64(callback * 10_000_104))
+            )
+        }
+
+        XCTAssertEqual(resolution, .pending)
+    }
+
     func testEmptyInputClearsOutput() throws {
         let format = floatFormat(sampleRate: 48_000, channelCount: 2)
         let processor = try AudioIOProcessor(

@@ -159,7 +159,7 @@ struct AudioCallbackCadenceAnalyzer {
     private static let requiredIntervalCount = 3
     private static let maximumObservationCount = 8
     private static let maximumRelativeError = 0.02
-    private static let minimumErrorSeparation = 0.01
+    private static let minimumErrorSeparationFraction = 0.5
 
     private let inputSampleRate: Double
     private let outputSampleRate: Double
@@ -232,10 +232,17 @@ struct AudioCallbackCadenceAnalyzer {
         )
         let selectedError = min(directError, conversionError)
         let errorSeparation = abs(directError - conversionError)
+        // The two valid answers converge as the nominal rates get closer. Use
+        // their actual distance instead of a fixed threshold so a 1 Hz
+        // difference remains classifiable without accepting the midpoint.
+        let expectedPathSeparation = abs(nominalRateRatio - 1)
+            / max(abs(nominalRateRatio), 1)
+        let requiredErrorSeparation = expectedPathSeparation
+            * Self.minimumErrorSeparationFraction
 
         guard
             selectedError <= Self.maximumRelativeError,
-            errorSeparation >= Self.minimumErrorSeparation
+            errorSeparation >= requiredErrorSeparation
         else {
             return observationCount >= Self.maximumObservationCount ? .failed : .pending
         }
