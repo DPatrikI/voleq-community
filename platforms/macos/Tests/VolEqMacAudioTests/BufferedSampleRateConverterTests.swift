@@ -93,9 +93,16 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         var input = Array(repeating: Float(0.125), count: 512 * 2)
         var output = Array(repeating: Float.zero, count: 512 * 2)
 
-        withInterleavedStereoBuffer(samples: &input) { inputList in
-            withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
-                processor.process(input: inputList, output: outputList)
+        for callback in 0..<4 {
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                    processor.process(
+                        input: inputList,
+                        inputTime: hostTimestamp(UInt64(callback * 11_610)),
+                        output: outputList,
+                        outputTime: hostTimestamp(UInt64(callback * 11_610))
+                    )
+                }
             }
         }
 
@@ -110,6 +117,38 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         XCTAssertTrue(output.allSatisfy { abs($0) > 0.12 })
     }
 
+    func testEqualFrameCountsOnDifferentClocksKeepSampleRateConversion() throws {
+        let processor = try AudioIOProcessor(
+            inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
+            outputFormat: floatFormat(sampleRate: 44_100, channelCount: 2),
+            settings: neutralSettings()
+        )
+        var input = Array(repeating: Float(0.125), count: 512 * 2)
+        var output = Array(repeating: Float.zero, count: 512 * 2)
+
+        for callback in 0..<4 {
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                    processor.process(
+                        input: inputList,
+                        inputTime: hostTimestamp(UInt64(callback * 10_667)),
+                        output: outputList,
+                        outputTime: hostTimestamp(UInt64(callback * 11_610))
+                    )
+                }
+            }
+        }
+
+        XCTAssertEqual(
+            processor.currentDiagnostics(),
+            AudioIOProcessingDiagnostics(
+                path: .sampleRateConverter,
+                inputFrameCount: 512,
+                outputFrameCount: 512
+            )
+        )
+    }
+
     func testRateMatchedCallbackPeriodsKeepSampleRateConversion() throws {
         let processor = try AudioIOProcessor(
             inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
@@ -119,11 +158,16 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         var input = Array(repeating: Float(0.125), count: 480 * 2)
         var output = Array(repeating: Float.zero, count: 441 * 2)
 
-        for _ in 0..<2 {
+        for callback in 0..<6 {
             output = Array(repeating: Float.zero, count: 441 * 2)
             withInterleavedStereoBuffer(samples: &input) { inputList in
                 withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
-                    processor.process(input: inputList, output: outputList)
+                    processor.process(
+                        input: inputList,
+                        inputTime: hostTimestamp(UInt64(callback * 10_000)),
+                        output: outputList,
+                        outputTime: hostTimestamp(UInt64(callback * 10_000))
+                    )
                 }
             }
         }
@@ -137,6 +181,82 @@ final class BufferedSampleRateConverterTests: XCTestCase {
             )
         )
         XCTAssertTrue(output.contains { abs($0) > 0.01 })
+    }
+
+    func testCloseNominalRatesResolveSynchronizedCallbacks() {
+        var analyzer = AudioCallbackCadenceAnalyzer(
+            inputSampleRate: 48_000,
+            outputSampleRate: 47_999
+        )
+        var resolution = AudioCadenceResolution.pending
+
+        for callback in 0..<4 {
+            resolution = analyzer.observe(
+                inputFrameCount: 480,
+                inputTime: hostTimestamp(UInt64(callback * 10_000_000)),
+                outputFrameCount: 480,
+                outputTime: hostTimestamp(UInt64(callback * 10_000_000))
+            )
+        }
+
+        XCTAssertEqual(resolution, .resolved(.directAggregateClock))
+    }
+
+    func testCloseNominalRatesResolveDistinctClocks() {
+        var analyzer = AudioCallbackCadenceAnalyzer(
+            inputSampleRate: 48_000,
+            outputSampleRate: 47_999
+        )
+        var resolution = AudioCadenceResolution.pending
+
+        for callback in 0..<4 {
+            resolution = analyzer.observe(
+                inputFrameCount: 480,
+                inputTime: hostTimestamp(UInt64(callback * 10_000_000)),
+                outputFrameCount: 480,
+                outputTime: hostTimestamp(UInt64(callback * 10_000_208))
+            )
+        }
+
+        XCTAssertEqual(resolution, .resolved(.sampleRateConverter))
+    }
+
+    func testCloseNominalRatesKeepAmbiguousCadencePending() {
+        var analyzer = AudioCallbackCadenceAnalyzer(
+            inputSampleRate: 48_000,
+            outputSampleRate: 47_999
+        )
+        var resolution = AudioCadenceResolution.pending
+
+        for callback in 0..<4 {
+            resolution = analyzer.observe(
+                inputFrameCount: 480,
+                inputTime: hostTimestamp(UInt64(callback * 10_000_000)),
+                outputFrameCount: 480,
+                outputTime: hostTimestamp(UInt64(callback * 10_000_104))
+            )
+        }
+
+        XCTAssertEqual(resolution, .pending)
+    }
+
+    func testEmptyInputClearsOutput() throws {
+        let format = floatFormat(sampleRate: 48_000, channelCount: 2)
+        let processor = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings()
+        )
+        var input: [Float] = []
+        var output = Array(repeating: Float(0.75), count: 512 * 2)
+
+        withInterleavedStereoBuffer(samples: &input) { inputList in
+            withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                processor.process(input: inputList, output: outputList)
+            }
+        }
+
+        XCTAssertTrue(output.allSatisfy { $0 == 0 })
     }
 
     private func assertSustainedConversion(
@@ -267,6 +387,13 @@ final class BufferedSampleRateConverterTests: XCTestCase {
             mBitsPerChannel: 32,
             mReserved: 0
         )
+    }
+
+    private func hostTimestamp(_ hostTime: UInt64) -> AudioTimeStamp {
+        var timestamp = AudioTimeStamp()
+        timestamp.mHostTime = hostTime
+        timestamp.mFlags = .hostTimeValid
+        return timestamp
     }
 
     private func neutralSettings() -> LevelingSettings {

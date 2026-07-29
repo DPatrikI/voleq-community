@@ -7,6 +7,7 @@ import VolEqDSP
 
 private let converterNeedsMoreInput = OSStatus(bitPattern: 0x564E_4441) // 'VNDA'
 private let converterOutputUnderrun = OSStatus(bitPattern: 0x564F_5552) // 'VOUR'
+private let callbackTimingUnavailable = OSStatus(bitPattern: 0x5643_544D) // 'VCTM'
 
 /// A fixed-capacity, interleaved stereo FIFO used only by the audio callback.
 ///
@@ -139,6 +140,128 @@ struct SampleRateConversionResult: Equatable {
 enum AudioSampleRatePath: Equatable {
     case directAggregateClock
     case sampleRateConverter
+}
+
+enum AudioCadenceResolution: Equatable {
+    case pending
+    case resolved(AudioSampleRatePath)
+    case failed
+}
+
+/// Resolves the effective input/output clock relationship from hardware time.
+///
+/// Buffer sizes alone are not authoritative: equal frame counts at different
+/// rates can describe different durations. Host-time deltas are in one common
+/// clock domain, so comparing delivered frames per host tick distinguishes an
+/// aggregate tap already synchronized to the output from a route that still
+/// needs sample-rate conversion.
+struct AudioCallbackCadenceAnalyzer {
+    private static let requiredIntervalCount = 3
+    private static let maximumObservationCount = 8
+    private static let maximumRelativeError = 0.02
+    private static let minimumErrorSeparationFraction = 0.5
+
+    private let inputSampleRate: Double
+    private let outputSampleRate: Double
+    private var previousInputHostTime: UInt64?
+    private var previousOutputHostTime: UInt64?
+    private var previousInputFrameCount = 0
+    private var previousOutputFrameCount = 0
+    private var accumulatedInputFrames = 0.0
+    private var accumulatedOutputFrames = 0.0
+    private var accumulatedInputHostTicks = 0.0
+    private var accumulatedOutputHostTicks = 0.0
+    private var intervalCount = 0
+    private var observationCount = 0
+
+    init(inputSampleRate: Double, outputSampleRate: Double) {
+        self.inputSampleRate = inputSampleRate
+        self.outputSampleRate = outputSampleRate
+    }
+
+    mutating func observe(
+        inputFrameCount: Int,
+        inputTime: AudioTimeStamp?,
+        outputFrameCount: Int,
+        outputTime: AudioTimeStamp?
+    ) -> AudioCadenceResolution {
+        observationCount += 1
+        guard
+            let inputHostTime = Self.validHostTime(inputTime),
+            let outputHostTime = Self.validHostTime(outputTime)
+        else {
+            previousInputHostTime = nil
+            previousOutputHostTime = nil
+            previousInputFrameCount = 0
+            previousOutputFrameCount = 0
+            return observationCount >= Self.maximumObservationCount ? .failed : .pending
+        }
+
+        defer {
+            previousInputHostTime = inputHostTime
+            previousOutputHostTime = outputHostTime
+            previousInputFrameCount = inputFrameCount
+            previousOutputFrameCount = outputFrameCount
+        }
+
+        guard
+            let previousInputHostTime,
+            let previousOutputHostTime,
+            inputHostTime > previousInputHostTime,
+            outputHostTime > previousOutputHostTime,
+            previousInputFrameCount > 0,
+            previousOutputFrameCount > 0
+        else {
+            return observationCount >= Self.maximumObservationCount ? .failed : .pending
+        }
+
+        accumulatedInputFrames += Double(previousInputFrameCount)
+        accumulatedOutputFrames += Double(previousOutputFrameCount)
+        accumulatedInputHostTicks += Double(inputHostTime - previousInputHostTime)
+        accumulatedOutputHostTicks += Double(outputHostTime - previousOutputHostTime)
+        intervalCount += 1
+
+        guard intervalCount >= Self.requiredIntervalCount else { return .pending }
+        let observedRateRatio = accumulatedInputFrames * accumulatedOutputHostTicks
+            / (accumulatedOutputFrames * accumulatedInputHostTicks)
+        let nominalRateRatio = inputSampleRate / outputSampleRate
+        let directError = Self.relativeError(observedRateRatio, expected: 1)
+        let conversionError = Self.relativeError(
+            observedRateRatio,
+            expected: nominalRateRatio
+        )
+        let selectedError = min(directError, conversionError)
+        let errorSeparation = abs(directError - conversionError)
+        // The two valid answers converge as the nominal rates get closer. Use
+        // their actual distance instead of a fixed threshold so a 1 Hz
+        // difference remains classifiable without accepting the midpoint.
+        let expectedPathSeparation = abs(nominalRateRatio - 1)
+            / max(abs(nominalRateRatio), 1)
+        let requiredErrorSeparation = expectedPathSeparation
+            * Self.minimumErrorSeparationFraction
+
+        guard
+            selectedError <= Self.maximumRelativeError,
+            errorSeparation >= requiredErrorSeparation
+        else {
+            return observationCount >= Self.maximumObservationCount ? .failed : .pending
+        }
+        return .resolved(
+            directError < conversionError
+                ? .directAggregateClock
+                : .sampleRateConverter
+        )
+    }
+
+    private static func validHostTime(_ timestamp: AudioTimeStamp?) -> UInt64? {
+        guard let timestamp else { return nil }
+        let hostTimeValid = timestamp.mFlags.contains(.hostTimeValid)
+        return hostTimeValid ? timestamp.mHostTime : nil
+    }
+
+    private static func relativeError(_ observed: Double, expected: Double) -> Double {
+        abs(observed - expected) / max(abs(expected), 0.000_001)
+    }
 }
 
 struct AudioIOProcessingDiagnostics: Equatable {
@@ -494,6 +617,7 @@ final class AudioIOProcessor {
     private let onConversionFailure: @Sendable (OSStatus) -> Void
     private let diagnosticsLock = NSLock()
     private var sharedDiagnostics: AudioIOProcessingDiagnostics?
+    private var cadenceAnalyzer: AudioCallbackCadenceAnalyzer?
     private var selectedPath: AudioSampleRatePath?
     /// Written only by the serial audio callback; avoids a lock attempt per period.
     private var diagnosticsRecorded = false
@@ -515,9 +639,14 @@ final class AudioIOProcessor {
                 inputSampleRate: inputFormat.mSampleRate,
                 outputFormat: outputFormat
             )
+            cadenceAnalyzer = AudioCallbackCadenceAnalyzer(
+                inputSampleRate: inputFormat.mSampleRate,
+                outputSampleRate: outputFormat.mSampleRate
+            )
             usesSampleRateConversion = true
         } else {
             sampleRateConverter = nil
+            cadenceAnalyzer = nil
             usesSampleRateConversion = false
             selectedPath = .directAggregateClock
         }
@@ -536,11 +665,17 @@ final class AudioIOProcessor {
 
     func process(
         input: UnsafePointer<AudioBufferList>,
-        output: UnsafeMutablePointer<AudioBufferList>
+        inputTime: AudioTimeStamp? = nil,
+        output: UnsafeMutablePointer<AudioBufferList>,
+        outputTime: AudioTimeStamp? = nil
     ) {
         let inputFrameCount = Self.minimumAvailableFrameCount(in: input)
         let outputFrameCount = Self.minimumAvailableFrameCount(in: output)
-        guard inputFrameCount > 0, outputFrameCount > 0 else { return }
+        guard outputFrameCount > 0 else { return }
+        guard inputFrameCount > 0 else {
+            Self.clear(output: output)
+            return
+        }
 
         guard let sampleRateConverter else {
             recordDiagnosticsIfNeeded(
@@ -552,13 +687,35 @@ final class AudioIOProcessor {
             return
         }
 
-        let path = selectedPath ?? Self.chooseSampleRatePath(
-            inputFrameCount: inputFrameCount,
-            outputFrameCount: outputFrameCount,
-            inputSampleRate: inputSampleRate,
-            outputSampleRate: outputSampleRate
-        )
-        selectedPath = path
+        let path: AudioSampleRatePath
+        if let selectedPath {
+            path = selectedPath
+        } else {
+            guard var cadenceAnalyzer else {
+                Self.clear(output: output)
+                reportConversionFailureIfNeeded(callbackTimingUnavailable)
+                return
+            }
+            let resolution = cadenceAnalyzer.observe(
+                inputFrameCount: inputFrameCount,
+                inputTime: inputTime,
+                outputFrameCount: outputFrameCount,
+                outputTime: outputTime
+            )
+            self.cadenceAnalyzer = cadenceAnalyzer
+            switch resolution {
+            case .pending:
+                Self.clear(output: output)
+                return
+            case let .resolved(resolvedPath):
+                selectedPath = resolvedPath
+                path = resolvedPath
+            case .failed:
+                Self.clear(output: output)
+                reportConversionFailureIfNeeded(callbackTimingUnavailable)
+                return
+            }
+        }
         recordDiagnosticsIfNeeded(
             path: path,
             inputFrameCount: inputFrameCount,
@@ -572,43 +729,15 @@ final class AudioIOProcessor {
 
         sampleRateConverter.appendProcessedInput(input, processor: conversionDynamics)
         let result = sampleRateConverter.fillOutput(output)
-        if let errorStatus = result.errorStatus, !reportedConversionFailure {
-            reportedConversionFailure = true
-            onConversionFailure(errorStatus)
+        if let errorStatus = result.errorStatus {
+            reportConversionFailureIfNeeded(errorStatus)
         }
     }
 
-    static func chooseSampleRatePath(
-        inputFrameCount: Int,
-        outputFrameCount: Int,
-        inputSampleRate: Double,
-        outputSampleRate: Double
-    ) -> AudioSampleRatePath {
-        guard
-            inputFrameCount > 0,
-            outputFrameCount > 0,
-            inputSampleRate > 0,
-            outputSampleRate > 0,
-            abs(inputSampleRate - outputSampleRate) >= 1
-        else {
-            return .directAggregateClock
-        }
-
-        // Aggregate devices can advertise the tap's nominal rate on input while
-        // drift compensation has already synchronized the callback periods to
-        // the output clock. In that case equal input/output frame counts must be
-        // copied directly; converting them again creates a short buffer followed
-        // by silence on every period. If the callback frame ratio instead matches
-        // the nominal rate ratio, this process still owns the required conversion.
-        let normalization = Double(max(outputFrameCount, 1))
-        let directError = abs(Double(inputFrameCount - outputFrameCount)) / normalization
-        let convertedOutputFrameEstimate = Double(inputFrameCount)
-            * outputSampleRate / inputSampleRate
-        let conversionError = abs(convertedOutputFrameEstimate - Double(outputFrameCount))
-            / normalization
-        return directError < conversionError
-            ? .directAggregateClock
-            : .sampleRateConverter
+    private func reportConversionFailureIfNeeded(_ status: OSStatus) {
+        guard !reportedConversionFailure else { return }
+        reportedConversionFailure = true
+        onConversionFailure(status)
     }
 
     private func recordDiagnosticsIfNeeded(
@@ -648,5 +777,13 @@ final class AudioIOProcessor {
         in list: UnsafeMutablePointer<AudioBufferList>
     ) -> Int {
         minimumAvailableFrameCount(in: UnsafePointer(list))
+    }
+
+    private static func clear(output list: UnsafeMutablePointer<AudioBufferList>) {
+        let buffers = UnsafeMutableAudioBufferListPointer(list)
+        for buffer in buffers {
+            guard let data = buffer.mData else { continue }
+            memset(data, 0, Int(buffer.mDataByteSize))
+        }
     }
 }

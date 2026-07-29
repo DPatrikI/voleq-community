@@ -229,8 +229,13 @@ public final class AudioCaptureController: ObservableObject {
                     &newIOProcID,
                     aggregateDeviceID,
                     ioQueue
-                ) { _, inputData, _, outputData, _ in
-                    processor.process(input: inputData, output: outputData)
+                ) { _, inputData, inputTime, outputData, outputTime in
+                    processor.process(
+                        input: inputData,
+                        inputTime: inputTime.pointee,
+                        output: outputData,
+                        outputTime: outputTime.pointee
+                    )
                 },
                 "Create audio processing callback"
             )
