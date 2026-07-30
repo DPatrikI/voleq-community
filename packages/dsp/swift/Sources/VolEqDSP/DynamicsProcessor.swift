@@ -42,6 +42,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         let releaseCoefficient: Float
         let detectorAttackCoefficient: Float
         let detectorReleaseCoefficient: Float
+        let speechGainRiseCoefficient: Float
         let limiterAmplitude: Float
         let lookaheadFrameCount: Int
     }
@@ -53,6 +54,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
 
     private let sampleRate: Float
     private let speechAnalyzer: (any SpeechAnalyzing)?
+    private let appliesSpeechLeveling: Bool
     private let minimumLookaheadFrameCount: Int
     private let fixedSpeechLookaheadSeconds: Float?
     private let parameterLock = NSLock()
@@ -61,6 +63,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
     private var realtimeParameters: RuntimeParameters
     private var powerEnvelope: Float = 0
     private var smoothedGain: Float = 1
+    private var smoothedSpeechOutputGain: Float = 1
     private var delayedLeft: [Float]
     private var delayedRight: [Float]
     private var delayedMaximumGain: [Float]
@@ -80,6 +83,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
             sampleRate: sampleRate,
             settings: settings,
             speechAnalyzer: nil,
+            appliesSpeechLeveling: false,
             minimumLookaheadFrameCount: 0
         )
     }
@@ -92,6 +96,20 @@ public final class DynamicsProcessor: @unchecked Sendable {
         sampleRate: Double,
         settings: LevelingSettings = LevelingSettings(),
         speechAnalyzer: any SpeechAnalyzing
+    ) throws {
+        try self.init(
+            sampleRate: sampleRate,
+            settings: settings,
+            speechAnalyzer: speechAnalyzer,
+            appliesSpeechLeveling: true
+        )
+    }
+
+    convenience init(
+        sampleRate: Double,
+        settings: LevelingSettings = LevelingSettings(),
+        speechAnalyzer: any SpeechAnalyzing,
+        appliesSpeechLeveling: Bool
     ) throws {
         let rate = Self.normalizedSampleRate(sampleRate)
         let maximumLookaheadFrameCount = max(Int((rate * 0.050).rounded(.up)), 1)
@@ -115,6 +133,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
             sampleRate: sampleRate,
             settings: settings,
             speechAnalyzer: speechAnalyzer,
+            appliesSpeechLeveling: appliesSpeechLeveling,
             minimumLookaheadFrameCount: speechAnalyzer.analysisLatencyFrameCount
         )
     }
@@ -123,6 +142,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         sampleRate: Double,
         settings: LevelingSettings,
         speechAnalyzer: (any SpeechAnalyzing)?,
+        appliesSpeechLeveling: Bool,
         minimumLookaheadFrameCount: Int
     ) {
         let rate = Self.normalizedSampleRate(sampleRate)
@@ -134,6 +154,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         )
         self.sampleRate = rate
         self.speechAnalyzer = speechAnalyzer
+        self.appliesSpeechLeveling = appliesSpeechLeveling && speechAnalyzer != nil
         self.minimumLookaheadFrameCount = minimumLookaheadFrameCount
         fixedSpeechLookaheadSeconds = speechAnalyzer == nil
             ? nil
@@ -141,7 +162,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         sharedParameters = parameters
         realtimeParameters = parameters
         activeLookaheadFrameCount = parameters.lookaheadFrameCount
-        currentUpwardEligibility = speechAnalyzer == nil ? 1 : 0
+        currentUpwardEligibility = self.appliesSpeechLeveling ? 0 : 1
         speechGate = SpeechLevelingGate(sampleRate: rate)
         let analysisBlockCapacity = speechAnalyzer?.sourceBlockFrameCount ?? 1
         analysisLeftBlock = Array(repeating: 0, count: analysisBlockCapacity)
@@ -153,7 +174,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
             count: maximumLookaheadFrameCount
         )
         delayedUpwardEligibility = Array(
-            repeating: speechAnalyzer == nil ? 1 : 0,
+            repeating: self.appliesSpeechLeveling ? 0 : 1,
             count: maximumLookaheadFrameCount
         )
     }
@@ -239,8 +260,13 @@ public final class DynamicsProcessor: @unchecked Sendable {
         let eligibleGain = constrainedGain > 1
             ? 1 + (constrainedGain - 1) * delayedFrame.upwardEligibility
             : constrainedGain
+        let outputGain = smoothedSpeechGain(
+            target: eligibleGain,
+            upwardEligibility: delayedFrame.upwardEligibility,
+            parameters: realtimeParameters
+        )
         return apply(
-            gain: eligibleGain,
+            gain: outputGain,
             left: delayedFrame.left,
             right: delayedFrame.right,
             parameters: realtimeParameters
@@ -329,7 +355,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         let shapedDB: Float
         if inputDB > settings.thresholdDB {
             return gainForLoudLevel(inputDB, settings: settings)
-        } else if speechAnalyzer != nil, upwardEligibility <= 0 {
+        } else if appliesSpeechLeveling, upwardEligibility <= 0 {
             let noiseGateDB = effectiveNoiseGateDB(settings: settings)
             guard speechGate.learnedNoiseFloorDB != nil, inputDB < noiseGateDB else {
                 return 1
@@ -418,7 +444,8 @@ public final class DynamicsProcessor: @unchecked Sendable {
     private func resetRealtimeState(lookaheadFrameCount: Int) {
         powerEnvelope = 0
         smoothedGain = 1
-        currentUpwardEligibility = speechAnalyzer == nil ? 1 : 0
+        smoothedSpeechOutputGain = 1
+        currentUpwardEligibility = appliesSpeechLeveling ? 0 : 1
         speechGate.reset()
         processingFailed = false
         analysisBlockFrameCount = 0
@@ -445,6 +472,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
                 seconds: settings.detectorReleaseSeconds,
                 sampleRate: sampleRate
             ),
+            speechGainRiseCoefficient: coefficient(seconds: 0.030, sampleRate: sampleRate),
             limiterAmplitude: powf(10, settings.limiterDB / 20),
             lookaheadFrameCount: max(
                 Int((settings.lookaheadSeconds * sampleRate).rounded()),
@@ -473,7 +501,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
     }
 
     private func effectiveNoiseGateDB(settings: LevelingSettings) -> Float {
-        guard speechAnalyzer != nil else { return settings.noiseGateDB }
+        guard appliesSpeechLeveling else { return settings.noiseGateDB }
         return speechGate.effectiveNoiseGateDB(
             fixedNoiseGateDB: settings.noiseGateDB,
             compressionThresholdDB: settings.thresholdDB
@@ -542,6 +570,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
                 processingFailed = true
                 return
             }
+            guard appliesSpeechLeveling else { return }
             let eligibility = speechGate.observe(
                 result,
                 fixedNoiseGateDB: parameters.settings.noiseGateDB,
@@ -553,16 +582,31 @@ public final class DynamicsProcessor: @unchecked Sendable {
                 analysisLatencyFrameCount: result.analysisLatencyFrameCount
             )
 
-            if eligibility > 0 {
-                let sourcePowerDB = 10 * log10f(max(result.sourcePower, 0.000_000_000_001))
-                let speechGain = gainForDetectedLevel(
-                    sourcePowerDB,
-                    settings: parameters.settings,
-                    upwardEligibility: 1
-                )
-                smoothedGain = max(smoothedGain, speechGain)
-            }
         }
+    }
+
+    private func smoothedSpeechGain(
+        target: Float,
+        upwardEligibility: Float,
+        parameters: RuntimeParameters
+    ) -> Float {
+        guard appliesSpeechLeveling else { return target }
+        guard target >= 1 else {
+            smoothedSpeechOutputGain = 1
+            return target
+        }
+        guard upwardEligibility > 0 else {
+            smoothedSpeechOutputGain = 1
+            return 1
+        }
+        guard target > smoothedSpeechOutputGain else {
+            smoothedSpeechOutputGain = target
+            return target
+        }
+        smoothedSpeechOutputGain = parameters.speechGainRiseCoefficient
+            * smoothedSpeechOutputGain
+            + (1 - parameters.speechGainRiseCoefficient) * target
+        return min(smoothedSpeechOutputGain, target)
     }
 
     private func backfillEligibility(

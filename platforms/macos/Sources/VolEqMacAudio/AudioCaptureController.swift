@@ -29,6 +29,7 @@ public final class AudioCaptureController: ObservableObject {
     @Published public var processes: [AudioProcess] = []
     @Published public var selectedProcessID: AudioObjectID?
     @Published public var mode: CaptureMode = .application
+    @Published public var speechAwarenessEnabled = true
     @Published public var levelingSettings = LevelingSettings() {
         didSet { audioProcessor?.updateSettings(levelingSettings) }
     }
@@ -150,7 +151,9 @@ public final class AudioCaptureController: ObservableObject {
         do {
             // Verify the local model before a muting process tap exists. Analyzer
             // and resampler states are then prepared before AudioDeviceStart.
-            let speechModel = try AudioIOProcessor.loadSpeechModel()
+            let speechModel = speechAwarenessEnabled
+                ? try AudioIOProcessor.loadSpeechModel()
+                : nil
             let outputDeviceID = try defaultOutputDevice()
             let outputUID = try readString(
                 objectID: outputDeviceID,
@@ -239,6 +242,7 @@ public final class AudioCaptureController: ObservableObject {
                 inputFormat: callbackInputFormat,
                 outputFormat: outputFormat,
                 settings: levelingSettings,
+                speechAwarenessEnabled: speechAwarenessEnabled,
                 speechModel: speechModel
             )
             audioProcessor = processor

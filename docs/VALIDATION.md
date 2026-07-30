@@ -42,17 +42,19 @@ The earlier Bluetooth routing implementation was listened to successfully on bot
 
 Branch: `feat/speech-aware-leveling`
 
-Automated status: complete on 2026-07-30; physical listening pending.
+Automated status: complete on 2026-07-30; MacBook-speaker regression fix
+accepted, broader physical listening pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 63 passed |
+| Developer environment checks / Swift tests | 5 / 69 passed |
 | Pinned RNNoise / SpeexDSP revisions, BSD-3 licenses, and full-model checksum | Passed |
 | Real offline model loading and checksum rejection | Passed |
 | Probability bounds, finite RNNoise output, and resampler-aligned power metadata | Passed |
 | 10 ms frame accounting, fresh-state-equivalent reset, reported latency, and checkpointed 1,000-block drift at 16 / 44.1 / 48 kHz | Passed |
 | Deterministic open / hysteresis / 200 ms hold / 150 ms fade | Passed |
 | First-syllable eligibility backfill without preceding-noise gain | Passed |
+| Per-sample speech-gain slew and analyzer-only parity with the base leveler | Passed |
 | Learned noise floor and static-noise no-boost guarantee | Passed |
 | Quiet-speech boost, non-speech dry bypass, and loud-content protection | Passed |
 | Startup failure plus one-shot direct / converted runtime recovery and controller stop transition | Passed |
@@ -71,10 +73,23 @@ can be classified as speech. RNNoise denoised samples are not used in this
 change, so active suppression still belongs to the later noise-suppression
 branch.
 
+The initial physical build sounded strongly robotic on MacBook speakers only
+when speech-aware processing was enabled. A three-way A/B run showed that both
+the base leveler and RNNoise analysis without applied decisions were clean,
+isolating the defect to 10 ms gain changes rather than analyzer callback cost.
+After replacing block-edge upward-gain changes with a 30 ms per-sample rise,
+while keeping release on the gate's existing 150 ms eligibility fade, the owner
+confirmed on 2026-07-30 that all three diagnostic modes
+were free of the robotic artifact. The temporary analyzer-only UI control was
+then removed; the speech-aware on/off switch remains.
+
 ### Listening gate
 
+- [x] MacBook speakers: speech-aware on/off and analyzer-only A/B are free of
+  the robotic artifact after gain smoothing.
 - [ ] MacBook speakers: static, microphone bump, clean speech, speech with
-  background noise, music, and quiet-to-loud transitions.
+  background noise, music, and quiet-to-loud transitions still need the full
+  scenario matrix.
 - [ ] Sennheiser HDB 630: regular playback and microphone-active call mode.
 - [ ] Apple AirPods Pro 2: regular playback and microphone-active call mode.
 - [ ] Confirm quiet speech remains clear and louder without raising stationary

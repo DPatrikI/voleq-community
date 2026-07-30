@@ -641,37 +641,49 @@ final class AudioIOProcessor {
         inputFormat: AudioStreamBasicDescription,
         outputFormat: AudioStreamBasicDescription,
         settings: LevelingSettings,
+        speechAwarenessEnabled: Bool = true,
         speechModel: RNNoiseModelResource? = nil,
         speechAnalyzerFactory: ((Double) throws -> any SpeechAnalyzing)? = nil
     ) throws {
         inputSampleRate = inputFormat.mSampleRate
         outputSampleRate = outputFormat.mSampleRate
-        let directAnalyzer: any SpeechAnalyzing
-        let conversionAnalyzer: any SpeechAnalyzing
-        if let speechAnalyzerFactory {
-            directAnalyzer = try speechAnalyzerFactory(outputFormat.mSampleRate)
-            conversionAnalyzer = try speechAnalyzerFactory(inputFormat.mSampleRate)
-        } else {
-            let model = try speechModel ?? Self.loadSpeechModel()
-            directAnalyzer = try RNNoiseSpeechAnalyzer(
+        if speechAwarenessEnabled {
+            let directAnalyzer: any SpeechAnalyzing
+            let conversionAnalyzer: any SpeechAnalyzing
+            if let speechAnalyzerFactory {
+                directAnalyzer = try speechAnalyzerFactory(outputFormat.mSampleRate)
+                conversionAnalyzer = try speechAnalyzerFactory(inputFormat.mSampleRate)
+            } else {
+                let model = try speechModel ?? Self.loadSpeechModel()
+                directAnalyzer = try RNNoiseSpeechAnalyzer(
+                    sampleRate: outputFormat.mSampleRate,
+                    model: model
+                )
+                conversionAnalyzer = try RNNoiseSpeechAnalyzer(
+                    sampleRate: inputFormat.mSampleRate,
+                    model: model
+                )
+            }
+            directDynamics = try DynamicsProcessor(
                 sampleRate: outputFormat.mSampleRate,
-                model: model
+                settings: settings,
+                speechAnalyzer: directAnalyzer
             )
-            conversionAnalyzer = try RNNoiseSpeechAnalyzer(
+            conversionDynamics = try DynamicsProcessor(
                 sampleRate: inputFormat.mSampleRate,
-                model: model
+                settings: settings,
+                speechAnalyzer: conversionAnalyzer
+            )
+        } else {
+            directDynamics = DynamicsProcessor(
+                sampleRate: outputFormat.mSampleRate,
+                settings: settings
+            )
+            conversionDynamics = DynamicsProcessor(
+                sampleRate: inputFormat.mSampleRate,
+                settings: settings
             )
         }
-        directDynamics = try DynamicsProcessor(
-            sampleRate: outputFormat.mSampleRate,
-            settings: settings,
-            speechAnalyzer: directAnalyzer
-        )
-        conversionDynamics = try DynamicsProcessor(
-            sampleRate: inputFormat.mSampleRate,
-            settings: settings,
-            speechAnalyzer: conversionAnalyzer
-        )
         directProcessingLatencyFrameCount = directDynamics.latencyFrameCount
         conversionProcessingLatencyFrameCount = conversionDynamics.latencyFrameCount
         if abs(inputFormat.mSampleRate - outputFormat.mSampleRate) >= 1 {

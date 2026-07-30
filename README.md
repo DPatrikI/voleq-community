@@ -13,6 +13,7 @@ The Community app intentionally has a small surface:
 
 - turn voice leveling on or off;
 - attach to one currently active application or the device-wide output mix;
+- turn speech-aware quiet-gain protection on or off while stopped;
 - use a fixed, safe speech-leveling preset.
 
 The source is open for inspection, modification, and contribution. VolEq Premium is planned as a separately distributed application with advanced controls, profiles, automation, automatic switching, and commercial support. See [the edition boundary](docs/EDITIONS.md).
@@ -51,6 +52,10 @@ The application is assembled at `dist/VolEq Community.app`.
 ## How it works
 
 On macOS 14.2+, VolEq uses Core Audio process taps to capture an application's outgoing audio, applies linked-stereo speech leveling, and sends the result to the current default output device. Offline RNNoise analysis decides when upward leveling is allowed: quiet speech can be raised, while static and other non-speech stay dry or are attenuated below the learned noise floor. Loud content still receives downward protection regardless of classification. The original selected audio is muted only while VolEq is actively replacing it. Device-wide mode excludes VolEq itself to avoid a feedback loop.
+
+Speech-aware leveling can be disabled before starting a session. In that mode,
+the model and analyzer are not constructed and VolEq uses the base lookahead
+leveler.
 
 Speech analysis uses the bundled model and performs no network requests. VolEq
 does not record, persist, upload, or add telemetry to captured audio. See the

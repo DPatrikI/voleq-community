@@ -79,16 +79,18 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         let processor = try DynamicsProcessor(sampleRate: 48_000, speechAnalyzer: analyzer)
         let quiet = amplitude(at: -40)
         var output = [Float]()
-        output.reserveCapacity(processor.latencyFrameCount + 1_920)
+        output.reserveCapacity(processor.latencyFrameCount + 6_000)
 
-        for frame in 0..<(processor.latencyFrameCount + 1_920) {
+        for frame in 0..<(processor.latencyFrameCount + 6_000) {
             let input: Float = frame < 480 ? amplitude(at: -60) : quiet
             output.append(processor.processFrame(left: input, right: input).left)
         }
 
         let unrelatedOutput = output[processor.latencyFrameCount..<(processor.latencyFrameCount + 480)]
-        let firstSpeechOutput = output[processor.latencyFrameCount + 480]
-        XCTAssertGreaterThan(firstSpeechOutput, quiet * 1.05)
+        let firstSpeechOutputFrame = processor.latencyFrameCount + 480
+        let firstSpeechOutput = output[firstSpeechOutputFrame]
+        XCTAssertGreaterThanOrEqual(firstSpeechOutput, quiet * 0.999)
+        XCTAssertGreaterThan(output[firstSpeechOutputFrame + 4_800], quiet * 1.05)
         XCTAssertLessThanOrEqual(
             unrelatedOutput.map(abs).max() ?? 0,
             amplitude(at: -60) * 1.001
@@ -117,8 +119,13 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         }
 
         let firstSpeechOutputFrame = processor.latencyFrameCount + 440
-        let transition = output[firstSpeechOutputFrame..<(firstSpeechOutputFrame + 520)]
-        XCTAssertTrue(transition.allSatisfy { $0 > speech * 1.05 })
+        let transition = Array(output[firstSpeechOutputFrame..<(firstSpeechOutputFrame + 520)])
+        XCTAssertTrue(transition.allSatisfy { $0 >= speech * 0.999 })
+        XCTAssertGreaterThan(transition.last ?? 0, transition.first ?? 0)
+        let largestGainStep = zip(transition, transition.dropFirst())
+            .map { abs($1 - $0) / speech }
+            .max() ?? 0
+        XCTAssertLessThan(largestGainStep, 0.01)
         XCTAssertLessThanOrEqual(
             output[..<firstSpeechOutputFrame].map(abs).max() ?? 0,
             amplitude(at: -60) * 1.001
@@ -156,6 +163,94 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
             output = processor.processFrame(left: input, right: input).left
         }
         XCTAssertGreaterThan(output, input * 1.5)
+    }
+
+    func testSpeechGainSlewCannotDefeatLookaheadOnALoudOnset() throws {
+        let sampleRate = 48_000
+        let analyzer = ScriptedSpeechAnalyzer(
+            sampleRate: Double(sampleRate),
+            repeating: .init(probability: 0.9, power: power(at: -40))
+        )
+        let processor = try DynamicsProcessor(
+            sampleRate: Double(sampleRate),
+            speechAnalyzer: analyzer
+        )
+        let quiet = amplitude(at: -40)
+
+        for _ in 0..<(sampleRate * 2) {
+            _ = processor.processFrame(left: quiet, right: quiet)
+        }
+
+        var loudOutput: [Float] = []
+        loudOutput.reserveCapacity(sampleRate + processor.latencyFrameCount)
+        for _ in 0..<(sampleRate + processor.latencyFrameCount) {
+            loudOutput.append(abs(processor.processFrame(left: 1, right: 1).left))
+        }
+
+        let latency = processor.latencyFrameCount
+        let firstLookaheadPeriodPeak = loudOutput[latency..<(latency * 2)].max() ?? 0
+        let settledPeak = loudOutput.suffix(latency).max() ?? 0
+        XCTAssertGreaterThan(settledPeak, 0)
+        XCTAssertLessThanOrEqual(
+            decibels(firstLookaheadPeriodPeak),
+            decibels(settledPeak) + 1
+        )
+    }
+
+    func testSpeechToStaticCannotKeepAnExtraGainTail() throws {
+        let sampleRate = 48_000
+        let input = amplitude(at: -45)
+        let speechBlockCount = 100
+        let analyzer = ScriptedSpeechAnalyzer(
+            sampleRate: Double(sampleRate),
+            script: Array(
+                repeating: .init(probability: 0.9, power: power(at: -45)),
+                count: speechBlockCount
+            ),
+            repeating: .init(probability: 0.1, power: power(at: -45))
+        )
+        let processor = try DynamicsProcessor(
+            sampleRate: Double(sampleRate),
+            speechAnalyzer: analyzer
+        )
+        let transitionInputFrame = speechBlockCount * analyzer.sourceBlockFrameCount
+        let totalInputFrameCount = transitionInputFrame + sampleRate * 4
+        var output: [Float] = []
+        output.reserveCapacity(totalInputFrameCount + processor.latencyFrameCount)
+
+        for _ in 0..<(totalInputFrameCount + processor.latencyFrameCount) {
+            output.append(abs(processor.processFrame(left: input, right: input).left))
+        }
+
+        let transitionOutputFrame = transitionInputFrame + processor.latencyFrameCount
+        let afterGateFade = transitionOutputFrame + Int(Double(sampleRate) * 0.36)
+        XCTAssertLessThanOrEqual(
+            output[afterGateFade..<(afterGateFade + 4_800)].max() ?? input,
+            input * 1.001
+        )
+        XCTAssertLessThan(output.suffix(4_800).max() ?? input, input * 0.8)
+    }
+
+    func testAnalysisOnlyMatchesTheLegacyLevelerSampleForSample() throws {
+        let analyzer = ScriptedSpeechAnalyzer(
+            sampleRate: 48_000,
+            repeating: .init(probability: 0.9, power: power(at: -40))
+        )
+        let analysisOnly = try DynamicsProcessor(
+            sampleRate: 48_000,
+            speechAnalyzer: analyzer,
+            appliesSpeechLeveling: false
+        )
+        let legacy = DynamicsProcessor(sampleRate: 48_000)
+
+        for frame in 0..<12_000 {
+            let left = Float(sin(Double(frame) * 0.031)) * 0.02
+            let right = Float(sin(Double(frame) * 0.047 + 0.4)) * 0.018
+            let analyzed = analysisOnly.processFrame(left: left, right: right)
+            let baseline = legacy.processFrame(left: left, right: right)
+            XCTAssertEqual(analyzed.left, baseline.left, accuracy: 0.000_001)
+            XCTAssertEqual(analyzed.right, baseline.right, accuracy: 0.000_001)
+        }
     }
 
     func testDeterministicStereoMusicRemainsDryAfterLatencyAlignment() throws {
@@ -292,6 +387,10 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
 
     private func power(at decibels: Float) -> Float {
         powf(10, decibels / 10)
+    }
+
+    private func decibels(_ amplitude: Float) -> Float {
+        20 * log10f(max(amplitude, 0.000_000_1))
     }
 }
 

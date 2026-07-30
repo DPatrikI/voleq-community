@@ -65,6 +65,13 @@ The open-source macOS application shell. It owns the Community interface, permis
   only at probability 0.20 or lower with a two-second time constant. Upward gain
   also requires 6 dB of clearance above that floor. Classification never disables
   downward compression, lookahead protection, or limiting.
+- Speech decisions never snap the output gain at a 10 ms analysis boundary.
+  Upward gain rises with a 30 ms per-sample slew. Its removal follows the gate's
+  existing 150 ms eligibility fade, while zero eligibility enforces unity
+  immediately. Gain below unity remains immediate so loud onsets retain
+  lookahead protection. Disabling
+  speech-aware leveling while stopped skips model and analyzer construction and
+  uses the base leveler.
 - Model construction, latency inspection, reset, and settings mutation are
   control-thread operations. Only prepared sample processing is real-time safe.
   Non-finite analysis latches the processor in a silent failed state and publishes

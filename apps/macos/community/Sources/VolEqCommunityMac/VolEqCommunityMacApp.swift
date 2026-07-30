@@ -69,6 +69,16 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .disabled(audio.isRunning)
 
+            Toggle("Speech-aware leveling", isOn: $audio.speechAwarenessEnabled)
+                .disabled(audio.isRunning)
+            Text(
+                audio.speechAwarenessEnabled
+                    ? "On: quiet gain is limited to detected speech."
+                    : "Off: uses the leveler without speech recognition."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             if audio.mode == .application {
                 HStack {
                     Picker("Application", selection: $audio.selectedProcessID) {
