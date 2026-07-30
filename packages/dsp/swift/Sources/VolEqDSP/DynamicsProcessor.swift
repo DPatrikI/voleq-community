@@ -27,6 +27,11 @@ public final class DynamicsProcessor: @unchecked Sendable {
         let lookaheadFrameCount: Int
     }
 
+    private struct GainDecision {
+        let smoothedGain: Float
+        let maximumGain: Float
+    }
+
     private let sampleRate: Float
     private let parameterLock = NSLock()
     private var sharedParameters: RuntimeParameters
@@ -36,6 +41,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
     private var smoothedGain: Float = 1
     private var delayedLeft: [Float]
     private var delayedRight: [Float]
+    private var delayedMaximumGain: [Float]
     private var delayWriteIndex = 0
     private var delayedFrameCount = 0
     private var activeLookaheadFrameCount: Int
@@ -53,6 +59,10 @@ public final class DynamicsProcessor: @unchecked Sendable {
         )
         delayedLeft = Array(repeating: 0, count: maximumLookaheadFrameCount)
         delayedRight = Array(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedMaximumGain = Array(
+            repeating: Float.greatestFiniteMagnitude,
+            count: maximumLookaheadFrameCount
+        )
     }
 
     public var settings: LevelingSettings {
@@ -62,6 +72,8 @@ public final class DynamicsProcessor: @unchecked Sendable {
     }
 
     /// The algorithmic delay introduced by the current lookahead setting.
+    /// Read this from a control or diagnostics thread; the getter takes the settings
+    /// lock and is intentionally not part of the real-time processing API.
     public var latencyFrameCount: Int {
         parameterLock.lock()
         defer { parameterLock.unlock() }
@@ -101,10 +113,14 @@ public final class DynamicsProcessor: @unchecked Sendable {
 
     /// Processes one linked-stereo frame with the current real-time parameter snapshot.
     public func processFrame(left: Float, right: Float) -> (left: Float, right: Float) {
-        let gain = analyzedGain(left: left, right: right, parameters: realtimeParameters)
-        let delayedFrame = delay(left: left, right: right)
+        let gainDecision = analyzedGain(left: left, right: right, parameters: realtimeParameters)
+        let delayedFrame = delay(
+            left: left,
+            right: right,
+            maximumGain: gainDecision.maximumGain
+        )
         return apply(
-            gain: gain,
+            gain: min(gainDecision.smoothedGain, delayedFrame.maximumGain),
             left: delayedFrame.left,
             right: delayedFrame.right,
             parameters: realtimeParameters
@@ -129,14 +145,18 @@ public final class DynamicsProcessor: @unchecked Sendable {
         parameterLock.lock()
         realtimeParameters = sharedParameters
         parameterLock.unlock()
-        return analyzedGain(left: left, right: right, parameters: realtimeParameters)
+        return analyzedGain(
+            left: left,
+            right: right,
+            parameters: realtimeParameters
+        ).smoothedGain
     }
 
     private func analyzedGain(
         left: Float,
         right: Float,
         parameters: RuntimeParameters
-    ) -> Float {
+    ) -> GainDecision {
         let settings = parameters.settings
         let framePower = (left * left + right * right) * 0.5
         let detectorCoefficient = framePower > powerEnvelope
@@ -153,8 +173,10 @@ public final class DynamicsProcessor: @unchecked Sendable {
         smoothedGain = gainCoefficient * smoothedGain + (1 - gainCoefficient) * desiredGain
 
         // The detector envelope is intentionally smooth, but a future peak must be
-        // allowed to lower gain immediately. It cannot raise gain, and the delayed
-        // audio still passes through the final limiter when it reaches the output.
+        // allowed to lower gain immediately. Its cap travels with the delayed frame,
+        // so release smoothing cannot recover before that peak reaches the output.
+        // Protection cannot raise gain, and the final limiter remains the last guard.
+        var maximumGain = Float.greatestFiniteMagnitude
         let futurePeak = max(abs(left), abs(right))
         if futurePeak > 0 {
             let futurePeakDB = 20 * log10f(futurePeak)
@@ -164,9 +186,10 @@ public final class DynamicsProcessor: @unchecked Sendable {
                     parameters.limiterAmplitude / futurePeak
                 )
                 smoothedGain = min(smoothedGain, protectiveGain)
+                maximumGain = protectiveGain
             }
         }
-        return smoothedGain
+        return GainDecision(smoothedGain: smoothedGain, maximumGain: maximumGain)
     }
 
     private func gainForDetectedLevel(
@@ -211,24 +234,34 @@ public final class DynamicsProcessor: @unchecked Sendable {
         return powf(10, (shapedDB - inputDB + settings.makeupGainDB) / 20)
     }
 
-    private func delay(left: Float, right: Float) -> (left: Float, right: Float) {
+    private func delay(
+        left: Float,
+        right: Float,
+        maximumGain: Float
+    ) -> (left: Float, right: Float, maximumGain: Float) {
         let lookaheadFrameCount = activeLookaheadFrameCount
-        guard lookaheadFrameCount > 0 else { return (left, right) }
+        guard lookaheadFrameCount > 0 else { return (left, right, maximumGain) }
 
         if delayedFrameCount < lookaheadFrameCount {
             delayedLeft[delayWriteIndex] = left
             delayedRight[delayWriteIndex] = right
+            delayedMaximumGain[delayWriteIndex] = maximumGain
             delayWriteIndex += 1
             if delayWriteIndex == lookaheadFrameCount {
                 delayWriteIndex = 0
             }
             delayedFrameCount += 1
-            return (0, 0)
+            return (0, 0, Float.greatestFiniteMagnitude)
         }
 
-        let output = (delayedLeft[delayWriteIndex], delayedRight[delayWriteIndex])
+        let output = (
+            left: delayedLeft[delayWriteIndex],
+            right: delayedRight[delayWriteIndex],
+            maximumGain: delayedMaximumGain[delayWriteIndex]
+        )
         delayedLeft[delayWriteIndex] = left
         delayedRight[delayWriteIndex] = right
+        delayedMaximumGain[delayWriteIndex] = maximumGain
         delayWriteIndex += 1
         if delayWriteIndex == lookaheadFrameCount {
             delayWriteIndex = 0

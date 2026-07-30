@@ -35,7 +35,7 @@ public struct LevelingSettings: Equatable, Sendable {
         releaseSeconds: Float = 0.200,
         detectorAttackSeconds: Float = 0.010,
         detectorReleaseSeconds: Float = 0.500,
-        lookaheadSeconds: Float = 0.010,
+        lookaheadSeconds: Float = 0.020,
         loudReductionDB: Float = 6
     ) {
         self.thresholdDB = thresholdDB

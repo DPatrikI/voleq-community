@@ -157,8 +157,8 @@ final class DynamicsProcessorTests: XCTestCase {
         XCTAssertEqual(LevelingSettings(loudReductionDB: -3).normalized().loudReductionDB, 0)
     }
 
-    func testLookaheadHasExactTenMillisecondLatencyAtSupportedRates() {
-        for (sampleRate, expectedFrames) in [(16_000.0, 160), (44_100.0, 441), (48_000.0, 480)] {
+    func testLookaheadHasExactTwentyMillisecondLatencyAtSupportedRates() {
+        for (sampleRate, expectedFrames) in [(16_000.0, 320), (44_100.0, 882), (48_000.0, 960)] {
             let processor = DynamicsProcessor(sampleRate: sampleRate)
             XCTAssertEqual(processor.latencyFrameCount, expectedFrames)
 
@@ -229,21 +229,26 @@ final class DynamicsProcessorTests: XCTestCase {
 
     func testLookaheadCatchesAnIsolatedFullScaleImpulse() {
         let processor = DynamicsProcessor(sampleRate: 48_000)
-        let quietAmplitude = powf(10, -40 / 20)
+        let latency = processor.latencyFrameCount
 
-        for _ in 0..<96_000 {
-            _ = processor.processFrame(left: quietAmplitude, right: quietAmplitude)
-        }
-        _ = processor.processFrame(left: 1, right: 1)
+        let initialOutput = processor.processFrame(left: 1, right: 1)
+        XCTAssertEqual(initialOutput.left, 0)
+        XCTAssertEqual(initialOutput.right, 0)
 
-        var peak: Float = 0
-        for _ in 0...processor.latencyFrameCount {
+        for _ in 1..<latency {
             let output = processor.processFrame(left: 0, right: 0)
-            peak = max(peak, max(abs(output.left), abs(output.right)))
+            XCTAssertEqual(output.left, 0)
+            XCTAssertEqual(output.right, 0)
         }
 
-        XCTAssertGreaterThan(peak, quietAmplitude)
-        XCTAssertLessThan(peak, 0.25)
+        let impulseOutput = processor.processFrame(left: 0, right: 0)
+        XCTAssertEqual(impulseOutput.left, impulseOutput.right)
+        XCTAssertGreaterThan(impulseOutput.left, 0)
+        XCTAssertLessThan(impulseOutput.left, 0.25)
+
+        let followingOutput = processor.processFrame(left: 0, right: 0)
+        XCTAssertEqual(followingOutput.left, 0)
+        XCTAssertEqual(followingOutput.right, 0)
     }
 
     func testLoudOriginSpeechSettlesAtLeastFiveDecibelsBelowQuietOriginSpeech() {

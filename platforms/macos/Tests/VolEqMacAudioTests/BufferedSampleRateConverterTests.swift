@@ -92,8 +92,9 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         )
         var input = Array(repeating: Float(0.125), count: 512 * 2)
         var output = Array(repeating: Float.zero, count: 512 * 2)
+        var resolvedOutput: [Float] = []
 
-        for callback in 0..<4 {
+        for callback in 0..<20 {
             withInterleavedStereoBuffer(samples: &input) { inputList in
                 withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
                     processor.process(
@@ -103,6 +104,12 @@ final class BufferedSampleRateConverterTests: XCTestCase {
                         outputTime: hostTimestamp(UInt64(callback * 11_610))
                     )
                 }
+            }
+            if processor.currentDiagnostics()?.path == .directAggregateClock {
+                resolvedOutput.append(contentsOf: stride(from: 0, to: output.count, by: 2).map {
+                    output[$0]
+                })
+                if resolvedOutput.count > 882 { break }
             }
         }
 
@@ -114,9 +121,8 @@ final class BufferedSampleRateConverterTests: XCTestCase {
                 outputFrameCount: 512
             )
         )
-        let delayedSampleCount = 441 * 2
-        XCTAssertTrue(output.prefix(delayedSampleCount).allSatisfy { $0 == 0 })
-        XCTAssertTrue(output.dropFirst(delayedSampleCount).allSatisfy { abs($0) > 0.12 })
+        let firstAudibleFrame = resolvedOutput.firstIndex { abs($0) > 0.12 }
+        XCTAssertEqual(firstAudibleFrame, 882)
     }
 
     func testEqualFrameCountsOnDifferentClocksKeepSampleRateConversion() throws {
@@ -151,16 +157,26 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         )
     }
 
-    func testRateMatchedCallbackPeriodsKeepSampleRateConversion() throws {
+    func testConvertedPathPreservesTwentyMillisecondLookahead() throws {
+        let immediateOnset = try convertedStepOnsetFrame(lookaheadSeconds: 0)
+        let lookaheadOnset = try convertedStepOnsetFrame(lookaheadSeconds: 0.020)
+
+        XCTAssertEqual(lookaheadOnset - immediateOnset, 882)
+    }
+
+    private func convertedStepOnsetFrame(lookaheadSeconds: Float) throws -> Int {
+        var settings = neutralSettings()
+        settings.lookaheadSeconds = lookaheadSeconds
         let processor = try AudioIOProcessor(
             inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
             outputFormat: floatFormat(sampleRate: 44_100, channelCount: 2),
-            settings: neutralSettings()
+            settings: settings
         )
         var input = Array(repeating: Float(0.125), count: 480 * 2)
         var output = Array(repeating: Float.zero, count: 441 * 2)
+        var resolvedOutput: [Float] = []
 
-        for callback in 0..<6 {
+        for callback in 0..<20 {
             output = Array(repeating: Float.zero, count: 441 * 2)
             withInterleavedStereoBuffer(samples: &input) { inputList in
                 withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
@@ -172,6 +188,11 @@ final class BufferedSampleRateConverterTests: XCTestCase {
                     )
                 }
             }
+            if processor.currentDiagnostics()?.path == .sampleRateConverter {
+                resolvedOutput.append(contentsOf: stride(from: 0, to: output.count, by: 2).map {
+                    output[$0]
+                })
+            }
         }
 
         XCTAssertEqual(
@@ -182,7 +203,7 @@ final class BufferedSampleRateConverterTests: XCTestCase {
                 outputFrameCount: 441
             )
         )
-        XCTAssertTrue(output.contains { abs($0) > 0.01 })
+        return try XCTUnwrap(resolvedOutput.firstIndex { abs($0) > 0.01 })
     }
 
     func testCloseNominalRatesResolveSynchronizedCallbacks() {
