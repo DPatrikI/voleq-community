@@ -3,6 +3,7 @@
 import AudioToolbox
 import VolEqCore
 import VolEqDSP
+import VolEqSpeech
 import XCTest
 @testable import VolEqMacAudio
 
@@ -82,6 +83,7 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         XCTAssertFalse(processor.usesSampleRateConversion)
         XCTAssertEqual(processor.inputSampleRate, 44_100)
         XCTAssertEqual(processor.outputSampleRate, 44_100)
+        XCTAssertEqual(processor.directProcessingLatencyFrameCount, 882)
     }
 
     func testEqualCallbackPeriodsBypassDuplicateNominalRateConversion() throws {
@@ -170,7 +172,8 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         let processor = try AudioIOProcessor(
             inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
             outputFormat: floatFormat(sampleRate: 44_100, channelCount: 2),
-            settings: settings
+            settings: settings,
+            speechAnalyzerFactory: { PendingSpeechAnalyzer(sampleRate: $0) }
         )
         var input = Array(repeating: Float(0.125), count: 480 * 2)
         var output = Array(repeating: Float.zero, count: 441 * 2)
@@ -282,6 +285,252 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         XCTAssertTrue(output.allSatisfy { $0 == 0 })
     }
 
+    func testAnalyzerStartupFailureStopsAudioIOConstruction() {
+        let format = floatFormat(sampleRate: 48_000, channelCount: 2)
+        XCTAssertThrowsError(
+            try AudioIOProcessor(
+                inputFormat: format,
+                outputFormat: format,
+                settings: neutralSettings(),
+                speechAnalyzerFactory: { _ in throw TestSpeechFailure.startup }
+            )
+        ) { error in
+            XCTAssertEqual(error as? TestSpeechFailure, .startup)
+        }
+    }
+
+    func testDirectAndConvertedPathsReceiveSeparateAnalyzerState() throws {
+        let creations = AnalyzerCreationRecorder()
+        _ = try AudioIOProcessor(
+            inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
+            outputFormat: floatFormat(sampleRate: 44_100, channelCount: 2),
+            settings: neutralSettings(),
+            speechAnalyzerFactory: { sampleRate in
+                creations.append(sampleRate)
+                return PendingSpeechAnalyzer(sampleRate: sampleRate)
+            }
+        )
+        XCTAssertEqual(creations.values, [44_100, 48_000])
+    }
+
+    func testRuntimeSpeechFailureClearsOutputAndReportsOnce() throws {
+        let format = floatFormat(sampleRate: 48_000, channelCount: 2)
+        let processor = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings(),
+            speechAnalyzerFactory: {
+                FailingSpeechAnalyzer(sampleRate: $0, failAfterSampleCount: 1_060)
+            }
+        )
+        var input = Array(repeating: Float(0.25), count: 480 * 2)
+        var output = Array(repeating: Float(0.75), count: 480 * 2)
+
+        for _ in 0..<2 {
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                    processor.process(input: inputList, output: outputList)
+                }
+            }
+            XCTAssertTrue(output.allSatisfy { $0 == 0 })
+            output = Array(repeating: Float(0.75), count: 480 * 2)
+        }
+
+        withInterleavedStereoBuffer(samples: &input) { inputList in
+            withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                processor.process(input: inputList, output: outputList)
+            }
+        }
+        XCTAssertTrue(output.allSatisfy { $0 == 0 }, "A partial callback must be cleared in full.")
+        XCTAssertEqual(processor.takePendingFailure(), speechAnalysisFailed)
+        XCTAssertNil(processor.takePendingFailure())
+
+        output = Array(repeating: Float(0.75), count: 480 * 2)
+        withInterleavedStereoBuffer(samples: &input) { inputList in
+            withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                processor.process(input: inputList, output: outputList)
+            }
+        }
+        XCTAssertTrue(output.allSatisfy { $0 == 0 }, "Fatal analysis state must remain latched.")
+        XCTAssertNil(processor.takePendingFailure())
+    }
+
+    func testRuntimeSpeechFailureClearsConvertedPathAndReportsOnce() throws {
+        let processor = try AudioIOProcessor(
+            inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
+            outputFormat: floatFormat(sampleRate: 44_100, channelCount: 2),
+            settings: neutralSettings(),
+            speechAnalyzerFactory: { sampleRate in
+                if sampleRate == 48_000 {
+                    return FailingSpeechAnalyzer(
+                        sampleRate: sampleRate,
+                        failAfterSampleCount: 700
+                    )
+                }
+                return PendingSpeechAnalyzer(sampleRate: sampleRate)
+            }
+        )
+        var failure: OSStatus?
+
+        for callback in 0..<12 {
+            var input = Array(repeating: Float(0.25), count: 480 * 2)
+            var output = Array(repeating: Float(0.75), count: 441 * 2)
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                    processor.process(
+                        input: inputList,
+                        inputTime: hostTimestamp(UInt64(callback * 10_000)),
+                        output: outputList,
+                        outputTime: hostTimestamp(UInt64(callback * 10_000))
+                    )
+                }
+            }
+
+            if let pendingFailure = processor.takePendingFailure() {
+                failure = pendingFailure
+                XCTAssertTrue(output.allSatisfy { $0 == 0 })
+                break
+            }
+        }
+
+        XCTAssertEqual(processor.currentDiagnostics()?.path, .sampleRateConverter)
+        XCTAssertEqual(failure, speechAnalysisFailed)
+
+        var input = Array(repeating: Float(0.25), count: 480 * 2)
+        var output = Array(repeating: Float(0.75), count: 441 * 2)
+        withInterleavedStereoBuffer(samples: &input) { inputList in
+            withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                processor.process(input: inputList, output: outputList)
+            }
+        }
+        XCTAssertTrue(output.allSatisfy { $0 == 0 })
+        XCTAssertNil(processor.takePendingFailure())
+    }
+
+    @available(macOS 14.2, *)
+    @MainActor
+    func testControllerConsumesRuntimeFailureOnceAndTransitionsToStoppedState() throws {
+        let format = floatFormat(sampleRate: 48_000, channelCount: 2)
+        let processor = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings(),
+            speechAnalyzerFactory: {
+                FailingSpeechAnalyzer(sampleRate: $0, failAfterSampleCount: 1)
+            }
+        )
+        var input = Array(repeating: Float(0.25), count: 480 * 2)
+        var output = Array(repeating: Float(0.75), count: 480 * 2)
+        withInterleavedStereoBuffer(samples: &input) { inputList in
+            withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                processor.process(input: inputList, output: outputList)
+            }
+        }
+
+        var resourceStopCount = 0
+        let controller = AudioCaptureController(
+            installSystemObservers: false,
+            initiallyRunning: true,
+            stopResourcesDidRun: { resourceStopCount += 1 }
+        )
+        XCTAssertTrue(controller.isRunning)
+        XCTAssertTrue(controller.recoverPendingProcessingFailure(from: processor))
+        XCTAssertEqual(resourceStopCount, 1)
+        XCTAssertFalse(controller.isRunning)
+        XCTAssertTrue(controller.status.contains("Original audio was restored"))
+
+        XCTAssertFalse(controller.recoverPendingProcessingFailure(from: processor))
+        XCTAssertEqual(resourceStopCount, 1)
+    }
+
+    func testRealSpeechAnalysisRunsOnBothConvertedRateDirections() throws {
+        for (inputRate, outputRate, inputHostStep, outputHostStep) in [
+            (48_000.0, 44_100.0, 10_667, 11_610),
+            (44_100.0, 48_000.0, 11_610, 10_667)
+        ] {
+            let processor = try AudioIOProcessor(
+                inputFormat: floatFormat(sampleRate: inputRate, channelCount: 2),
+                outputFormat: floatFormat(sampleRate: outputRate, channelCount: 2),
+                settings: neutralSettings()
+            )
+            var phase = 0.0
+            var foundAudibleOutput = false
+
+            for callback in 0..<200 {
+                var input = (0..<512).flatMap { _ -> [Float] in
+                    defer { phase += 2 * .pi * 330 / inputRate }
+                    let sample = Float(sin(phase) * 0.08)
+                    return [sample, sample]
+                }
+                var output = Array(repeating: Float.zero, count: 512 * 2)
+                withInterleavedStereoBuffer(samples: &input) { inputList in
+                    withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                        processor.process(
+                            input: inputList,
+                            inputTime: hostTimestamp(UInt64(callback * inputHostStep)),
+                            output: outputList,
+                            outputTime: hostTimestamp(UInt64(callback * outputHostStep))
+                        )
+                    }
+                }
+                XCTAssertTrue(output.allSatisfy(\.isFinite))
+                foundAudibleOutput = foundAudibleOutput || output.contains { abs($0) > 0.000_001 }
+                XCTAssertNil(processor.takePendingFailure())
+            }
+
+            XCTAssertEqual(processor.currentDiagnostics()?.path, .sampleRateConverter)
+            XCTAssertTrue(foundAudibleOutput)
+        }
+    }
+
+    func testRealSpeechAnalysisSustainsComplete16KCallModePeriods() throws {
+        let inputRate = 48_000.0
+        let processor = try AudioIOProcessor(
+            inputFormat: floatFormat(sampleRate: inputRate, channelCount: 2),
+            outputFormat: floatFormat(sampleRate: 16_000, channelCount: 1),
+            settings: neutralSettings()
+        )
+        var phase = 0.0
+        var startedOutput = false
+        var warmupPeriodCount = 0
+        var audiblePeriodCount = 0
+
+        for callback in 0..<200 {
+            var input = (0..<480).flatMap { _ -> [Float] in
+                defer { phase += 2 * .pi * 330 / inputRate }
+                let sample = Float(sin(phase) * 0.08)
+                return [sample, sample]
+            }
+            var output = Array(repeating: Float.zero, count: 160)
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &output, channelCount: 1) { outputList in
+                    processor.process(
+                        input: inputList,
+                        inputTime: hostTimestamp(UInt64(callback * 10_000)),
+                        output: outputList,
+                        outputTime: hostTimestamp(UInt64(callback * 10_000))
+                    )
+                }
+            }
+
+            XCTAssertTrue(output.allSatisfy(\.isFinite))
+            XCTAssertNil(processor.takePendingFailure())
+            let isAudible = output.contains { abs($0) > 0.000_001 }
+            if isAudible {
+                startedOutput = true
+                audiblePeriodCount += 1
+            } else if !startedOutput {
+                warmupPeriodCount += 1
+            } else {
+                XCTFail("The call-mode converter emitted an incomplete silent period after startup.")
+            }
+        }
+
+        XCTAssertEqual(processor.currentDiagnostics()?.path, .sampleRateConverter)
+        XCTAssertLessThanOrEqual(warmupPeriodCount, 10)
+        XCTAssertEqual(audiblePeriodCount, 200 - warmupPeriodCount)
+    }
+
     private func assertSustainedConversion(
         inputRate: Double,
         inputFramesPerPeriod: Int,
@@ -321,7 +570,7 @@ final class BufferedSampleRateConverterTests: XCTestCase {
                 count: outputFramesPerPeriod * Int(outputChannelCount)
             )
 
-            withInterleavedStereoBuffer(samples: &input) { inputList in
+            _ = withInterleavedStereoBuffer(samples: &input) { inputList in
                 converter.appendProcessedInput(inputList, processor: processor)
             }
             let result = withMutableInterleavedBuffer(
@@ -430,5 +679,62 @@ final class BufferedSampleRateConverterTests: XCTestCase {
             makeupGainDB: 0,
             limiterDB: 0
         )
+    }
+}
+
+private enum TestSpeechFailure: Error {
+    case startup
+}
+
+private final class PendingSpeechAnalyzer: SpeechAnalyzing {
+    let sourceSampleRate: Double
+    let sourceBlockFrameCount: Int
+    let analysisLatencyFrameCount = 0
+
+    init(sampleRate: Double) {
+        sourceSampleRate = sampleRate
+        sourceBlockFrameCount = max(Int((sampleRate * 0.010).rounded()), 1)
+    }
+
+    func processMonoSample(_: Float) -> SpeechAnalysisEvent { .pending }
+    func reset() {}
+}
+
+private final class FailingSpeechAnalyzer: SpeechAnalyzing {
+    let sourceSampleRate: Double
+    let sourceBlockFrameCount = 1
+    let analysisLatencyFrameCount = 1
+    private let failAfterSampleCount: Int
+    private var processedSampleCount = 0
+
+    init(sampleRate: Double, failAfterSampleCount: Int) {
+        sourceSampleRate = sampleRate
+        self.failAfterSampleCount = failAfterSampleCount
+    }
+
+    func processMonoSample(_: Float) -> SpeechAnalysisEvent {
+        processedSampleCount += 1
+        return processedSampleCount >= failAfterSampleCount ? .failed : .pending
+    }
+
+    func reset() {
+        processedSampleCount = 0
+    }
+}
+
+private final class AnalyzerCreationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Double] = []
+
+    var values: [Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func append(_ value: Double) {
+        lock.lock()
+        storage.append(value)
+        lock.unlock()
     }
 }

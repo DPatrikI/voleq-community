@@ -28,7 +28,8 @@ RNNoise source and model data, and the minimal SpeexDSP resampler subset, are
 included under their BSD 3-Clause licenses. Exact revisions, notices, model
 checksums, and reproduction instructions are recorded in
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md), the dependency
-`REVISION` files, and the model `PROVENANCE.md`. Their licenses remain separate
+`REVISION` files, `third_party/SOURCE_MANIFEST.sha256`, and the model
+`PROVENANCE.md`. Their licenses remain separate
 from the repository's MPL-2.0 license. Normal builds do not fetch dependencies
 or contact an online service.
 

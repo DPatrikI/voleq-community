@@ -42,9 +42,13 @@ public final class AudioCaptureController: ObservableObject {
     private var activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
     private var activeOutputListener: AudioObjectPropertyListenerBlock?
     private var activeOutputListenerAddresses: [AudioObjectPropertyAddress] = []
-    private var defaultOutputListener: AudioObjectPropertyListenerBlock?
+    // Swift deinitializers are nonisolated. All mutation still occurs on the
+    // main actor; this annotation only lets deinit unregister the retained
+    // Core Audio block after actor-isolated use has ended.
+    nonisolated(unsafe) private var defaultOutputListener: AudioObjectPropertyListenerBlock?
     private var routeRecoveryTask: Task<Void, Never>?
     private var processingDiagnosticsTask: Task<Void, Never>?
+    private let stopResourcesDidRun: (() -> Void)?
     private let ioQueue = DispatchQueue(
         label: "com.patrikistvandoczy.voleq.community.audio",
         qos: .userInteractive
@@ -54,12 +58,24 @@ public final class AudioCaptureController: ObservableObject {
         qos: .userInitiated
     )
 
-    public init() {
-        refreshProcesses()
-        do {
-            try installDefaultOutputListener()
-        } catch {
-            status = error.localizedDescription
+    public convenience init() {
+        self.init(installSystemObservers: true)
+    }
+
+    init(
+        installSystemObservers: Bool,
+        initiallyRunning: Bool = false,
+        stopResourcesDidRun: (() -> Void)? = nil
+    ) {
+        isRunning = initiallyRunning
+        self.stopResourcesDidRun = stopResourcesDidRun
+        if installSystemObservers {
+            refreshProcesses()
+            do {
+                try installDefaultOutputListener()
+            } catch {
+                status = error.localizedDescription
+            }
         }
     }
 
@@ -132,6 +148,9 @@ public final class AudioCaptureController: ObservableObject {
         stopResources()
 
         do {
+            // Verify the local model before a muting process tap exists. Analyzer
+            // and resampler states are then prepared before AudioDeviceStart.
+            let speechModel = try AudioIOProcessor.loadSpeechModel()
             let outputDeviceID = try defaultOutputDevice()
             let outputUID = try readString(
                 objectID: outputDeviceID,
@@ -175,6 +194,9 @@ public final class AudioCaptureController: ObservableObject {
                 kAudioAggregateDeviceNameKey: "VolEq Private Audio Device",
                 kAudioAggregateDeviceUIDKey: aggregateUID,
                 kAudioAggregateDeviceIsPrivateKey: true,
+                // Per AudioHardware.h, this makes AudioDeviceStart wait for
+                // tapped audio; it does not start the tap when the aggregate
+                // is created. Prepared analyzers exist before AudioDeviceStart.
                 kAudioAggregateDeviceTapAutoStartKey: true,
                 kAudioAggregateDeviceMainSubDeviceKey: outputUID,
                 kAudioAggregateDeviceSubDeviceListKey: [[
@@ -216,12 +238,9 @@ public final class AudioCaptureController: ObservableObject {
             let processor = try AudioIOProcessor(
                 inputFormat: callbackInputFormat,
                 outputFormat: outputFormat,
-                settings: levelingSettings
-            ) { [weak self] conversionStatus in
-                DispatchQueue.main.async { [weak self] in
-                    self?.handleAudioConversionFailure(conversionStatus)
-                }
-            }
+                settings: levelingSettings,
+                speechModel: speechModel
+            )
             audioProcessor = processor
             var newIOProcID: AudioDeviceIOProcID?
             try requireNoErr(
@@ -292,6 +311,7 @@ public final class AudioCaptureController: ObservableObject {
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
         audioProcessor = nil
+        stopResourcesDidRun?()
     }
 
     private func scheduleProcessingDiagnostics(
@@ -300,12 +320,17 @@ public final class AudioCaptureController: ObservableObject {
     ) {
         processingDiagnosticsTask?.cancel()
         processingDiagnosticsTask = Task { @MainActor [weak self] in
-            for _ in 0..<20 {
+            var diagnosticsRecorded = false
+            while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard let self, !Task.isCancelled, self.audioProcessor === processor else {
                     return
                 }
-                guard let diagnostics = processor.currentDiagnostics() else { continue }
+                if self.recoverPendingProcessingFailure(from: processor) {
+                    return
+                }
+                guard !diagnosticsRecorded,
+                      let diagnostics = processor.currentDiagnostics() else { continue }
 
                 switch diagnostics.path {
                 case .directAggregateClock:
@@ -323,8 +348,7 @@ public final class AudioCaptureController: ObservableObject {
                         + "(\(diagnostics.inputFrameCount)→\(diagnostics.outputFrameCount) callback frames; "
                         + "\(Int(processor.inputSampleRate))→\(Int(processor.outputSampleRate)) Hz)."
                 }
-                self.processingDiagnosticsTask = nil
-                return
+                diagnosticsRecorded = true
             }
             self?.processingDiagnosticsTask = nil
         }
@@ -438,12 +462,21 @@ public final class AudioCaptureController: ObservableObject {
         }
     }
 
-    private func handleAudioConversionFailure(_ conversionStatus: OSStatus) {
-        guard isRunning else { return }
+    @discardableResult
+    func recoverPendingProcessingFailure(from processor: AudioIOProcessor) -> Bool {
+        guard let failure = processor.takePendingFailure() else { return false }
+        recoverFromProcessingFailure(failure)
+        return true
+    }
+
+    private func recoverFromProcessingFailure(_ conversionStatus: OSStatus) {
         stopResources()
         isRunning = false
+        let operation = conversionStatus == speechAnalysisFailed
+            ? "Analyze speech locally"
+            : "Convert audio for the output device"
         let error = VolEqError.coreAudio(
-            operation: "Convert audio for the output device",
+            operation: operation,
             status: conversionStatus
         )
         status = "\(error.localizedDescription) Original audio was restored. Try starting again."

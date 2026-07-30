@@ -50,7 +50,11 @@ The application is assembled at `dist/VolEq Community.app`.
 
 ## How it works
 
-On macOS 14.2+, VolEq uses Core Audio process taps to capture an application's outgoing audio, applies linked-stereo speech leveling, and sends the result to the current default output device. The original selected audio is muted only while VolEq is actively replacing it. Device-wide mode excludes VolEq itself to avoid a feedback loop.
+On macOS 14.2+, VolEq uses Core Audio process taps to capture an application's outgoing audio, applies linked-stereo speech leveling, and sends the result to the current default output device. Offline RNNoise analysis decides when upward leveling is allowed: quiet speech can be raised, while static and other non-speech stay dry or are attenuated below the learned noise floor. Loud content still receives downward protection regardless of classification. The original selected audio is muted only while VolEq is actively replacing it. Device-wide mode excludes VolEq itself to avoid a feedback loop.
+
+Speech analysis uses the bundled model and performs no network requests. VolEq
+does not record, persist, upload, or add telemetry to captured audio. See the
+[privacy notes](docs/PRIVACY.md).
 
 VolEq measures the aggregate device's input and output cadence against Core Audio's host timestamps, including any drift compensation Core Audio already applies to a Bluetooth tap. When those measurements show that Core Audio has synchronized the route, VolEq bypasses duplicate conversion even if the stream labels still advertise different nominal rates. When they confirm that conversion remains necessary, VolEq converts the processed stream through Audio Converter Services with fixed-capacity real-time input and output FIFOs, so the device receives complete periods after a short pre-roll. It observes default-device, format, sample-rate, and device-availability changes and safely rebuilds the private audio path after a headset or output-route transition.
 
@@ -63,6 +67,7 @@ No virtual audio driver or permanent system-wide output-device change is require
 - The current path supports mono or stereo 32-bit floating-point PCM and converts differing capture/output sample rates. Multichannel layouts fail safely before processing starts.
 - The Sennheiser HDB 630 and Apple AirPods Pro 2 have been physically validated in regular playback and call mode with their microphones active. Deterministic tests cover 48↔44.1 kHz and 48→16 kHz paths, but live profile switching while VolEq remains active, broader headset compatibility, meeting apps, CPU usage, latency, and long-running stability still need structured validation.
 - The current mixed-stream processor levels the combined incoming audio. It cannot identify individual meeting participants or keep a separate profile for each speaker.
+- Singing can be classified as speech and may therefore receive quiet-speech leveling. Active noise suppression is not part of this version; RNNoise's denoised samples are deliberately discarded.
 
 ## Repository map
 
@@ -70,12 +75,16 @@ No virtual audio driver or permanent system-wide output-device change is require
 apps/macos/community/     Community macOS app and bundle resources
 packages/core/swift/      Platform-neutral product settings and types
 packages/dsp/swift/       Platform-neutral speech-leveling DSP
+packages/speech/swift/    Offline speech-analysis API and RNNoise adapter
 platforms/macos/          Core Audio capture and output adapter
+third_party/              Pinned RNNoise and SpeexDSP source subsets
 scripts/                  Developer build helpers
 docs/                     Architecture, editions, licensing, and roadmap
 ```
 
 Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing package boundaries.
+Dependency revisions, licenses, model checksums, and the manual reproduction
+workflow are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Contributing
 

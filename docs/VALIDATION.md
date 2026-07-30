@@ -38,6 +38,50 @@ The preset decision is accepted. The following broader release checks remain pen
 
 The earlier Bluetooth routing implementation was listened to successfully on both listed headsets in regular and call modes. That is routing evidence only; it does not count as acceptance of the new lookahead behavior.
 
+## Speech-aware leveling
+
+Branch: `feat/speech-aware-leveling`
+
+Automated status: complete on 2026-07-30; physical listening pending.
+
+| Check | Result |
+| --- | --- |
+| Developer environment checks / Swift tests | 5 / 63 passed |
+| Pinned RNNoise / SpeexDSP revisions, BSD-3 licenses, and full-model checksum | Passed |
+| Real offline model loading and checksum rejection | Passed |
+| Probability bounds, finite RNNoise output, and resampler-aligned power metadata | Passed |
+| 10 ms frame accounting, fresh-state-equivalent reset, reported latency, and checkpointed 1,000-block drift at 16 / 44.1 / 48 kHz | Passed |
+| Deterministic open / hysteresis / 200 ms hold / 150 ms fade | Passed |
+| First-syllable eligibility backfill without preceding-noise gain | Passed |
+| Learned noise floor and static-noise no-boost guarantee | Passed |
+| Quiet-speech boost, non-speech dry bypass, and loud-content protection | Passed |
+| Startup failure plus one-shot direct / converted runtime recovery and controller stop transition | Passed |
+| Existing lookahead, linked stereo, two-way conversion, 48→16 kHz mono call mode, and callback-cadence regressions | Passed |
+| Strict-concurrency build | Passed without warnings |
+| Release app, bundled model, ad-hoc signature, and property list | Passed |
+
+The Community preset keeps the accepted 20 ms DSP delay at 16, 44.1, and
+48 kHz. Analysis latency fits inside that delay at those rates, so speech
+classification adds no further DSP block. Sample-rate conversion and hardware
+buffers can still add route-specific latency outside the portable processor.
+
+The deterministic music fixture is preserved after latency alignment when its
+injected classification is non-speech. Singing remains a known limitation: it
+can be classified as speech. RNNoise denoised samples are not used in this
+change, so active suppression still belongs to the later noise-suppression
+branch.
+
+### Listening gate
+
+- [ ] MacBook speakers: static, microphone bump, clean speech, speech with
+  background noise, music, and quiet-to-loud transitions.
+- [ ] Sennheiser HDB 630: regular playback and microphone-active call mode.
+- [ ] Apple AirPods Pro 2: regular playback and microphone-active call mode.
+- [ ] Confirm quiet speech remains clear and louder without raising stationary
+  noise or unrelated sounds.
+- [ ] Confirm music stays natural and loud speech still receives the accepted
+  downward reduction.
+
 ## Release validation backlog
 
 Before `v0.1.0`, test Teams, Zoom, Meet, browser meetings, wired output, live route switching, process disappearance, sleep/wake, permission recovery, CPU use, memory behavior, and long-running stability. Compatibility claims must distinguish automated coverage from physical-device evidence.

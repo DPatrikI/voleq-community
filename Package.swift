@@ -49,22 +49,22 @@ let package = Package(
         ),
         .target(
             name: "VolEqDSP",
-            dependencies: ["VolEqCore"],
+            dependencies: ["VolEqCore", "VolEqSpeech"],
             path: "packages/dsp/swift/Sources/VolEqDSP"
         ),
         .target(
             name: "VolEqMacAudio",
-            dependencies: ["VolEqCore", "VolEqDSP"],
+            dependencies: ["VolEqCore", "VolEqDSP", "VolEqSpeech"],
             path: "platforms/macos/Sources/VolEqMacAudio"
         ),
         .executableTarget(
             name: "VolEqCommunityMac",
-            dependencies: ["VolEqMacAudio"],
+            dependencies: ["VolEqMacAudio", "VolEqSpeech"],
             path: "apps/macos/community/Sources/VolEqCommunityMac"
         ),
         .testTarget(
             name: "VolEqDSPTests",
-            dependencies: ["VolEqCore", "VolEqDSP"],
+            dependencies: ["VolEqCore", "VolEqDSP", "VolEqSpeech"],
             path: "packages/dsp/swift/Tests/VolEqDSPTests"
         ),
         .testTarget(

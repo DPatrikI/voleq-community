@@ -29,7 +29,7 @@ extension DynamicsProcessor {
     func process(
         input inputList: UnsafePointer<AudioBufferList>,
         output outputList: UnsafeMutablePointer<AudioBufferList>
-    ) {
+    ) -> Bool {
         let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputList))
         let outputs = UnsafeMutableAudioBufferListPointer(outputList)
 
@@ -40,12 +40,12 @@ extension DynamicsProcessor {
 
         let inputChannels = totalChannelCount(in: inputs)
         let outputChannels = totalChannelCount(in: outputs)
-        guard inputChannels > 0, outputChannels > 0 else { return }
+        guard inputChannels > 0, outputChannels > 0 else { return true }
 
         let inputFrames = minimumAvailableFrameCount(in: inputs)
         let outputFrames = minimumAvailableFrameCount(in: outputs)
         let frameCount = min(inputFrames, outputFrames)
-        guard frameCount > 0 else { return }
+        guard frameCount > 0 else { return true }
 
         beginAudioBuffer()
         for frame in 0..<frameCount {
@@ -58,6 +58,7 @@ extension DynamicsProcessor {
                 write(output.right, to: outputs, channel: 1, frame: frame)
             }
         }
+        return !consumeProcessingFailure()
     }
 
     @inline(__always)

@@ -7,8 +7,11 @@ VolEqCommunityMac
         |
         v
  VolEqMacAudio ------> VolEqDSP ------> VolEqCore
-        |                                  ^
-        +----------------------------------+
+        |                 |
+        |                 v
+        +----------> VolEqSpeech ------> CRNNoise
+                          |
+                          +-----------> CSpeexResampler
 ```
 
 ## Package responsibilities
@@ -21,6 +24,14 @@ Platform-neutral settings and product-domain types. It must not import SwiftUI, 
 
 The speech-leveling signal-processing implementation. It operates on numeric audio frames and must not know where audio came from or where it will be sent. New platform adapters should reuse this package instead of copying the algorithm.
 
+### `VolEqSpeech`
+
+The portable, injectable speech-analysis API and offline RNNoise implementation.
+It consumes fixed 10 ms mono source blocks, resamples only its analysis stream
+when needed, and reports normalized speech probability, source power, source
+frame coverage, and analysis latency. It uses `CRNNoise` and the minimal
+`CSpeexResampler` target; denoised RNNoise samples are discarded on this branch.
+
 ### `VolEqMacAudio`
 
 The macOS adapter. It owns Core Audio process discovery, process taps, aggregate-device lifecycle, audio-buffer adaptation, and output-device interaction. Apple-specific identifiers stay here.
@@ -32,8 +43,8 @@ The open-source macOS application shell. It owns the Community interface, permis
 ## Dependency rules
 
 - Lower-level packages never import an app target.
-- Core and DSP must not depend on macOS UI or Core Audio APIs.
-- Platform adapters may depend on Core and DSP.
+- Core, DSP, and Speech must not depend on macOS UI or Core Audio APIs.
+- Platform adapters may depend on Core, DSP, and Speech.
 - Product apps depend on platform adapters and may compose shared packages.
 - Premium-only files must live in the separate private repository; public MPL-covered files are consumed as dependencies rather than copied or forked.
 
@@ -42,6 +53,23 @@ The open-source macOS application shell. It owns the Community interface, permis
 - Do not allocate memory, wait on a contended lock, log, or call UI code in the audio callback.
 - UI settings are published as snapshots. The callback uses its previous snapshot if an update lock is busy.
 - The leveler allocates its linked-stereo lookahead storage during construction. Its default 20 ms delay lets the detector lower gain before a loud onset is emitted; the delay, detector, and gain history start empty whenever the audio route is rebuilt. The first lookahead period is therefore silence by design. A future peak may lower the gain envelope immediately but may never raise it, and its maximum-gain cap travels with the delayed frame so release smoothing cannot outrun an isolated transient. The delayed frame still passes through the final safety limiter.
+- RNNoise model loading and checksum verification finish before the process tap
+  is created. Analyzer-state creation, resampler setup, and buffer allocation
+  finish before `AudioDeviceStart`, which is when the prepared process tap can
+  begin replacing original audio. The callback feeds prepared state only. Speech
+  eligibility is stored beside delayed audio and transient caps; a result can
+  backfill only the source frames it covers, so an opening syllable is preserved
+  without granting upward gain to earlier unrelated sound.
+- Speech opens at probability 0.65, remains open above 0.35, holds for 200 ms,
+  then fades upward-gain eligibility over 150 ms. The background floor learns
+  only at probability 0.20 or lower with a two-second time constant. Upward gain
+  also requires 6 dB of clearance above that floor. Classification never disables
+  downward compression, lookahead protection, or limiting.
+- Model construction, latency inspection, reset, and settings mutation are
+  control-thread operations. Only prepared sample processing is real-time safe.
+  Non-finite analysis latches the processor in a silent failed state and publishes
+  one preallocated failure signal without blocking. A control-thread monitor then
+  tears down the replacement path so Core Audio restores the original audio.
 - The processor measures the aggregate callback's input/output frame cadence against Core Audio host timestamps, not only the tap's advertised rates or a single pair of buffer sizes. A shared effective clock indicates that tap drift compensation already synchronized the Bluetooth route and duplicate conversion must be bypassed; distinct input/output clocks use Audio Converter Services with preallocated input and output FIFOs. The output FIFO pre-rolls briefly and writes only complete device periods. A full FIFO drops its oldest frame to recover at the live edge instead of accumulating latency, while missing or inconclusive timing fails safely and sustained output underruns never emit repeated partial periods.
 - Always tear down the I/O callback before destroying its aggregate device or process tap.
 - Default-output, device-alive, sample-rate, and stream-format listeners rebuild the complete audio path after route or Bluetooth profile changes.

@@ -36,4 +36,4 @@ cp "$WORK_DIRECTORY/rnnoise/weights_blob.bin" \
 
 echo "Verified the pinned sources and regenerated the RNNoise model."
 echo "Review source changes separately before copying a newer upstream revision."
-
+echo "After an approved source update, regenerate third_party/SOURCE_MANIFEST.sha256."
