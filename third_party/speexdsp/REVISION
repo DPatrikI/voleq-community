@@ -1,0 +1,8 @@
+Upstream: https://github.com/xiph/speexdsp.git
+Revision: 7a158783df74efe7c2d1c6ee8363c1e695c71226
+License: BSD-3-Clause (see LICENSE)
+
+Bundled source is the minimal floating-point resampler subset: resample.c,
+arch.h, and the public speex_resampler.h header. The public header defines the
+VolEq-specific OUTSIDE_SPEEX and RANDOM_PREFIX values so its generated Clang
+module is self-contained; the resampling implementation is otherwise unchanged.

@@ -1,0 +1,9 @@
+Upstream: https://github.com/xiph/rnnoise.git
+Revision: 70f1d256acd4b34a572f999a05c87bf00b67730d
+License: BSD-3-Clause (see LICENSE)
+
+Bundled source is the portable C implementation required by the public
+RNNoise API. SIMD-specific and training-only sources are intentionally omitted.
+`rnnoise_model_init.c` is the model-topology function extracted from the
+upstream generated `rnnoise_data.c`; the large embedded arrays are replaced by
+the checked binary model resource.

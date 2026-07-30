@@ -24,4 +24,12 @@ MPL-2.0 does not grant rights to contributor trademarks. The VolEq product name,
 
 Dependencies, test fixtures, icons, fonts, and sample audio must have compatible, documented provenance before they are committed. Do not add copyrighted meeting recordings or unclear audio samples. Prefer original synthetic fixtures or CC0 material.
 
+RNNoise source and model data, and the minimal SpeexDSP resampler subset, are
+included under their BSD 3-Clause licenses. Exact revisions, notices, model
+checksums, and reproduction instructions are recorded in
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md), the dependency
+`REVISION` files, and the model `PROVENANCE.md`. Their licenses remain separate
+from the repository's MPL-2.0 license. Normal builds do not fetch dependencies
+or contact an online service.
+
 This document explains the intended repository policy and is not legal advice. Obtain legal review before commercial App Store distribution or licensing agreements.
