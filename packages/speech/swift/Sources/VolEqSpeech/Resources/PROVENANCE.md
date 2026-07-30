@@ -8,6 +8,8 @@
 
 The model is the full upstream RNNoise model. It is loaded from this local
 resource at startup; VolEq does not download a model while building or running.
-Run `scripts/update-speech-dependencies.sh` manually to reproduce and stage a
-future dependency or model update for review.
-
+Run `scripts/update-speech-dependencies.sh` manually to fetch the pinned source
+trees, reproduce the model, verify both upstream checksums, and replace the
+local model. Vendored source selection and local integration patches are
+reviewed and copied separately; regenerate `third_party/SOURCE_MANIFEST.sha256`
+after accepting any source update.
