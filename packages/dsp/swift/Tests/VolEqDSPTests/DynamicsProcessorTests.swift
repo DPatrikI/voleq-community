@@ -93,7 +93,9 @@ final class DynamicsProcessorTests: XCTestCase {
             attackSeconds: 0,
             releaseSeconds: -1,
             detectorAttackSeconds: .nan,
-            detectorReleaseSeconds: .infinity
+            detectorReleaseSeconds: .infinity,
+            lookaheadSeconds: -.infinity,
+            loudReductionDB: .nan
         )
 
         let processor = DynamicsProcessor(sampleRate: 48_000, settings: unsafeSettings)
@@ -112,6 +114,8 @@ final class DynamicsProcessorTests: XCTestCase {
         XCTAssertEqual(normalized.releaseSeconds, defaults.releaseSeconds)
         XCTAssertEqual(normalized.detectorAttackSeconds, defaults.detectorAttackSeconds)
         XCTAssertEqual(normalized.detectorReleaseSeconds, defaults.detectorReleaseSeconds)
+        XCTAssertEqual(normalized.lookaheadSeconds, defaults.lookaheadSeconds)
+        XCTAssertEqual(normalized.loudReductionDB, defaults.loudReductionDB)
     }
 
     func testSettingsNormalizationClampsFiniteValuesAndPreservesValidValues() {
@@ -127,7 +131,9 @@ final class DynamicsProcessorTests: XCTestCase {
             attackSeconds: 0.000_000_1,
             releaseSeconds: 90,
             detectorAttackSeconds: 0.025,
-            detectorReleaseSeconds: 0.750
+            detectorReleaseSeconds: 0.750,
+            lookaheadSeconds: 0.075,
+            loudReductionDB: 30
         )
 
         let normalized = settings.normalized()
@@ -144,7 +150,113 @@ final class DynamicsProcessorTests: XCTestCase {
         XCTAssertEqual(normalized.releaseSeconds, 60)
         XCTAssertEqual(normalized.detectorAttackSeconds, 0.025)
         XCTAssertEqual(normalized.detectorReleaseSeconds, 0.750)
+        XCTAssertEqual(normalized.lookaheadSeconds, 0.050)
+        XCTAssertEqual(normalized.loudReductionDB, 24)
         XCTAssertEqual(normalized.normalized(), normalized)
+        XCTAssertEqual(LevelingSettings(lookaheadSeconds: -1).normalized().lookaheadSeconds, 0)
+        XCTAssertEqual(LevelingSettings(loudReductionDB: -3).normalized().loudReductionDB, 0)
+    }
+
+    func testLookaheadHasExactTwentyMillisecondLatencyAtSupportedRates() {
+        for (sampleRate, expectedFrames) in [(16_000.0, 320), (44_100.0, 882), (48_000.0, 960)] {
+            let processor = DynamicsProcessor(sampleRate: sampleRate)
+            XCTAssertEqual(processor.latencyFrameCount, expectedFrames)
+
+            for _ in 0..<expectedFrames {
+                let output = processor.processFrame(left: 0.25, right: -0.125)
+                XCTAssertEqual(output.left, 0)
+                XCTAssertEqual(output.right, 0)
+            }
+
+            let firstDelayedOutput = processor.processFrame(left: 0.25, right: -0.125)
+            XCTAssertNotEqual(firstDelayedOutput.left, 0)
+            XCTAssertNotEqual(firstDelayedOutput.right, 0)
+        }
+    }
+
+    func testZeroLookaheadDisablesDelay() {
+        var settings = LevelingSettings()
+        settings.lookaheadSeconds = 0
+        let processor = DynamicsProcessor(sampleRate: 48_000, settings: settings)
+
+        XCTAssertEqual(processor.latencyFrameCount, 0)
+        let output = processor.processFrame(left: 0.25, right: 0.25)
+        XCTAssertNotEqual(output.left, 0)
+    }
+
+    func testResetRestoresInitialLookaheadSilence() {
+        let processor = DynamicsProcessor(sampleRate: 48_000)
+        let latency = processor.latencyFrameCount
+
+        for _ in 0...latency {
+            _ = processor.processFrame(left: 0.25, right: 0.25)
+        }
+        processor.reset()
+
+        for _ in 0..<latency {
+            let output = processor.processFrame(left: 0.25, right: 0.25)
+            XCTAssertEqual(output.left, 0)
+            XCTAssertEqual(output.right, 0)
+        }
+        XCTAssertNotEqual(processor.processFrame(left: 0.25, right: 0.25).left, 0)
+    }
+
+    func testLookaheadPreventsQuietToLoudOpeningBlast() {
+        let sampleRate = 48_000
+        let processor = DynamicsProcessor(sampleRate: Double(sampleRate))
+        let quietAmplitude = powf(10, -40 / 20)
+
+        for _ in 0..<(sampleRate * 2) {
+            _ = processor.processFrame(left: quietAmplitude, right: quietAmplitude)
+        }
+
+        var loudOutput: [Float] = []
+        loudOutput.reserveCapacity(sampleRate + processor.latencyFrameCount)
+        for _ in 0..<(sampleRate + processor.latencyFrameCount) {
+            let output = processor.processFrame(left: 1, right: 1)
+            loudOutput.append(abs(output.left))
+        }
+
+        let latency = processor.latencyFrameCount
+        let firstLookaheadPeriodPeak = loudOutput[latency..<(latency * 2)].max() ?? 0
+        let settledPeak = loudOutput.suffix(latency).max() ?? 0
+        XCTAssertGreaterThan(settledPeak, 0)
+        XCTAssertLessThanOrEqual(
+            decibels(firstLookaheadPeriodPeak),
+            decibels(settledPeak) + 1
+        )
+    }
+
+    func testLookaheadCatchesAnIsolatedFullScaleImpulse() {
+        let processor = DynamicsProcessor(sampleRate: 48_000)
+        let latency = processor.latencyFrameCount
+
+        let initialOutput = processor.processFrame(left: 1, right: 1)
+        XCTAssertEqual(initialOutput.left, 0)
+        XCTAssertEqual(initialOutput.right, 0)
+
+        for _ in 1..<latency {
+            let output = processor.processFrame(left: 0, right: 0)
+            XCTAssertEqual(output.left, 0)
+            XCTAssertEqual(output.right, 0)
+        }
+
+        let impulseOutput = processor.processFrame(left: 0, right: 0)
+        XCTAssertEqual(impulseOutput.left, impulseOutput.right)
+        XCTAssertGreaterThan(impulseOutput.left, 0)
+        XCTAssertLessThan(impulseOutput.left, 0.25)
+
+        let followingOutput = processor.processFrame(left: 0, right: 0)
+        XCTAssertEqual(followingOutput.left, 0)
+        XCTAssertEqual(followingOutput.right, 0)
+    }
+
+    func testLoudOriginSpeechSettlesAtLeastFiveDecibelsBelowQuietOriginSpeech() {
+        let quietOutputDB = settledProcessedOutputDB(inputDB: -40)
+        let loudOutputDB = settledProcessedOutputDB(inputDB: -6)
+
+        XCTAssertGreaterThanOrEqual(quietOutputDB - loudOutputDB, 5)
+        XCTAssertLessThanOrEqual(quietOutputDB - loudOutputDB, 9)
     }
 
     func testInvalidSettingsUpdateCannotProduceNonFiniteSamples() {
@@ -175,7 +287,7 @@ final class DynamicsProcessorTests: XCTestCase {
     }
 
     func testInvalidSampleRatesUseDeterministicSafeFallback() {
-        for sampleRate in [Double.nan, .infinity, -.infinity, 0, -48_000] {
+        for sampleRate in [Double.nan, .infinity, -.infinity, 0, -48_000, 1_000_000] {
             let fallbackProcessor = DynamicsProcessor(sampleRate: sampleRate)
             let referenceProcessor = DynamicsProcessor(sampleRate: 48_000)
 
@@ -198,5 +310,20 @@ final class DynamicsProcessorTests: XCTestCase {
             gain = processor.gain(left: amplitude, right: amplitude)
         }
         return 20 * log10f(max(amplitude * gain, 0.000_001))
+    }
+
+    private func settledProcessedOutputDB(inputDB: Float) -> Float {
+        let sampleRate = 48_000
+        let processor = DynamicsProcessor(sampleRate: Double(sampleRate))
+        let amplitude = powf(10, inputDB / 20)
+        var output: Float = 0
+        for _ in 0..<(sampleRate * 2 + processor.latencyFrameCount) {
+            output = processor.processFrame(left: amplitude, right: amplitude).left
+        }
+        return decibels(abs(output))
+    }
+
+    private func decibels(_ amplitude: Float) -> Float {
+        20 * log10f(max(amplitude, 0.000_001))
     }
 }

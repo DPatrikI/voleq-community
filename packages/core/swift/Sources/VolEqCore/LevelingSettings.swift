@@ -19,6 +19,8 @@ public struct LevelingSettings: Equatable, Sendable {
     public var releaseSeconds: Float
     public var detectorAttackSeconds: Float
     public var detectorReleaseSeconds: Float
+    public var lookaheadSeconds: Float
+    public var loudReductionDB: Float
 
     public init(
         thresholdDB: Float = -24,
@@ -32,7 +34,9 @@ public struct LevelingSettings: Equatable, Sendable {
         attackSeconds: Float = 0.001,
         releaseSeconds: Float = 0.200,
         detectorAttackSeconds: Float = 0.010,
-        detectorReleaseSeconds: Float = 0.500
+        detectorReleaseSeconds: Float = 0.500,
+        lookaheadSeconds: Float = 0.020,
+        loudReductionDB: Float = 6
     ) {
         self.thresholdDB = thresholdDB
         self.compressorRatio = compressorRatio
@@ -46,6 +50,8 @@ public struct LevelingSettings: Equatable, Sendable {
         self.releaseSeconds = releaseSeconds
         self.detectorAttackSeconds = detectorAttackSeconds
         self.detectorReleaseSeconds = detectorReleaseSeconds
+        self.lookaheadSeconds = lookaheadSeconds
+        self.loudReductionDB = loudReductionDB
     }
 
     /// Returns settings constrained to finite, processing-safe values.
@@ -119,6 +125,15 @@ public struct LevelingSettings: Equatable, Sendable {
             detectorReleaseSeconds: Self.normalizedTime(
                 detectorReleaseSeconds,
                 default: defaults.detectorReleaseSeconds
+            ),
+            lookaheadSeconds: Self.normalizedLookahead(
+                lookaheadSeconds,
+                default: defaults.lookaheadSeconds
+            ),
+            loudReductionDB: Self.clampedFinite(
+                loudReductionDB,
+                default: defaults.loudReductionDB,
+                range: 0...24
             )
         )
     }
@@ -135,5 +150,10 @@ public struct LevelingSettings: Equatable, Sendable {
     private static func normalizedTime(_ value: Float, default defaultValue: Float) -> Float {
         guard value.isFinite, value > 0 else { return defaultValue }
         return min(max(value, 0.000_001), 60)
+    }
+
+    private static func normalizedLookahead(_ value: Float, default defaultValue: Float) -> Float {
+        guard value.isFinite else { return defaultValue }
+        return min(max(value, 0), 0.050)
     }
 }
