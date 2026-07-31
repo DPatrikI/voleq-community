@@ -618,7 +618,8 @@ final class AudioIOProcessor {
 
     private let directDynamics: DynamicsProcessor
     private let conversionDynamics: DynamicsProcessor
-    private let contentAnalyzer: (any AudioContentAnalyzing)?
+    private let directContentAnalyzer: (any AudioContentAnalyzing)?
+    private let conversionContentAnalyzer: (any AudioContentAnalyzing)?
     private let sampleRateConverter: BufferedSampleRateConverter?
     private let diagnosticsLock = NSLock()
     private let failureLock = NSLock()
@@ -651,17 +652,36 @@ final class AudioIOProcessor {
         inputSampleRate = inputFormat.mSampleRate
         outputSampleRate = outputFormat.mSampleRate
         if speechAwarenessEnabled {
-            let contentAnalyzer: (any AudioContentAnalyzing)?
+            let directContentAnalyzer: (any AudioContentAnalyzing)?
+            let conversionContentAnalyzer: (any AudioContentAnalyzing)?
             if let contentAnalyzerFactory {
-                contentAnalyzer = try contentAnalyzerFactory(inputFormat.mSampleRate)
-            } else if systemContentAnalysisEnabled {
-                contentAnalyzer = try SystemAudioContentAnalyzer(
-                    sampleRate: inputFormat.mSampleRate
+                directContentAnalyzer = try contentAnalyzerFactory(
+                    outputFormat.mSampleRate
                 )
+                if abs(inputFormat.mSampleRate - outputFormat.mSampleRate) < 1 {
+                    conversionContentAnalyzer = directContentAnalyzer
+                } else {
+                    conversionContentAnalyzer = try contentAnalyzerFactory(
+                        inputFormat.mSampleRate
+                    )
+                }
+            } else if systemContentAnalysisEnabled {
+                directContentAnalyzer = try SystemAudioContentAnalyzer(
+                    sampleRate: outputFormat.mSampleRate
+                )
+                if abs(inputFormat.mSampleRate - outputFormat.mSampleRate) < 1 {
+                    conversionContentAnalyzer = directContentAnalyzer
+                } else {
+                    conversionContentAnalyzer = try SystemAudioContentAnalyzer(
+                        sampleRate: inputFormat.mSampleRate
+                    )
+                }
             } else {
-                contentAnalyzer = nil
+                directContentAnalyzer = nil
+                conversionContentAnalyzer = nil
             }
-            self.contentAnalyzer = contentAnalyzer
+            self.directContentAnalyzer = directContentAnalyzer
+            self.conversionContentAnalyzer = conversionContentAnalyzer
             let directAnalyzer: any SpeechAnalyzing
             let conversionAnalyzer: any SpeechAnalyzing
             if let speechAnalyzerFactory {
@@ -682,16 +702,17 @@ final class AudioIOProcessor {
                 sampleRate: outputFormat.mSampleRate,
                 settings: settings,
                 speechAnalyzer: directAnalyzer,
-                upwardGainAuthorizer: contentAnalyzer
+                upwardGainAuthorizer: directContentAnalyzer
             )
             conversionDynamics = try DynamicsProcessor(
                 sampleRate: inputFormat.mSampleRate,
                 settings: settings,
                 speechAnalyzer: conversionAnalyzer,
-                upwardGainAuthorizer: contentAnalyzer
+                upwardGainAuthorizer: conversionContentAnalyzer
             )
         } else {
-            contentAnalyzer = nil
+            directContentAnalyzer = nil
+            conversionContentAnalyzer = nil
             directDynamics = DynamicsProcessor(
                 sampleRate: outputFormat.mSampleRate,
                 settings: settings
@@ -754,9 +775,11 @@ final class AudioIOProcessor {
             Self.clear(output: output)
             return
         }
-        contentAnalyzer?.append(input: input, frameCount: inputFrameCount)
-
         guard let sampleRateConverter else {
+            directContentAnalyzer?.append(
+                input: input,
+                frameCount: inputFrameCount
+            )
             recordDiagnosticsIfNeeded(
                 path: .directAggregateClock,
                 inputFrameCount: inputFrameCount,
@@ -806,6 +829,10 @@ final class AudioIOProcessor {
         )
 
         guard path == .sampleRateConverter else {
+            directContentAnalyzer?.append(
+                input: input,
+                frameCount: inputFrameCount
+            )
             guard directDynamics.process(input: input, output: output) else {
                 Self.clear(output: output)
                 reportConversionFailureIfNeeded(speechAnalysisFailed)
@@ -814,6 +841,10 @@ final class AudioIOProcessor {
             return
         }
 
+        conversionContentAnalyzer?.append(
+            input: input,
+            frameCount: inputFrameCount
+        )
         guard sampleRateConverter.appendProcessedInput(input, processor: conversionDynamics) else {
             Self.clear(output: output)
             reportConversionFailureIfNeeded(speechAnalysisFailed)

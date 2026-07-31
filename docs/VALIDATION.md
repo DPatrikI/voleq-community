@@ -47,7 +47,7 @@ accepted, broader physical listening pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 83 passed |
+| Developer environment checks / Swift tests | 5 / 85 passed |
 | Pinned RNNoise / SpeexDSP revisions, BSD-3 licenses, and full-model checksum | Passed |
 | Real offline model loading and checksum rejection | Passed |
 | Probability bounds, finite RNNoise output, and resampler-aligned power metadata | Passed |
@@ -64,6 +64,7 @@ accepted, broader physical listening pending.
 | Quiet-speech boost, non-speech dry bypass, and loud-content protection | Passed |
 | Startup failure plus one-shot direct / converted runtime recovery and controller stop transition | Passed |
 | Existing lookahead, linked stereo, two-way conversion, 48→16 kHz mono call mode, and callback-cadence regressions | Passed |
+| Synchronized direct routes feed content analysis at the output rate; converted routes use the input rate | Passed |
 | Strict-concurrency build | Passed without warnings |
 | Release app, bundled model, ad-hoc signature, and property list | Passed |
 
@@ -123,6 +124,8 @@ remained dry. The temporary content diagnostics were then removed.
 The owner completed this physical listening matrix on 2026-07-31 after the
 macOS content-authority calibration. No robotic processing, intermittent music
 boost, or loss of quiet-speech leveling remained in the accepted build.
+The affected synchronized route was retested and accepted after content analysis
+was split between the direct output clock and converted input clock.
 
 ## Release validation backlog
 

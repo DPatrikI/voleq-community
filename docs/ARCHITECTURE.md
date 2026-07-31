@@ -89,6 +89,12 @@ The open-source macOS application shell. It owns the Community interface, permis
   system analyzer timeline so pre-gap speech cannot influence newly starting
   content. This platform adapter never changes downward compression, lookahead
   protection, or limiting.
+- macOS prepares separate system content analyzers for the direct and converted
+  paths before audio starts. The direct analyzer uses the output device's
+  effective rate, while the converted analyzer uses the captured input rate.
+  Cadence resolution feeds only the selected analyzer, preventing synchronized
+  aggregate and Bluetooth routes from labeling output-clock samples with a
+  stale nominal input rate.
 - Model construction, latency inspection, reset, and settings mutation are
   control-thread operations. Only prepared sample processing is real-time safe.
   Non-finite analysis latches the processor in a silent failed state and publishes

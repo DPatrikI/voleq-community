@@ -426,6 +426,66 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         XCTAssertEqual(creations.values, [44_100, 48_000])
     }
 
+    func testSynchronizedDirectPathFeedsContentAnalysisAtOutputRate() throws {
+        let contentAnalyzers = ContentAnalyzerRecorder()
+        let processor = try AudioIOProcessor(
+            inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
+            outputFormat: floatFormat(sampleRate: 44_100, channelCount: 2),
+            settings: neutralSettings(),
+            speechAnalyzerFactory: { PendingSpeechAnalyzer(sampleRate: $0) },
+            contentAnalyzerFactory: { contentAnalyzers.make(sampleRate: $0) }
+        )
+        var input = Array(repeating: Float(0.125), count: 512 * 2)
+        var output = Array(repeating: Float.zero, count: 512 * 2)
+
+        for callback in 0..<4 {
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                    processor.process(
+                        input: inputList,
+                        inputTime: hostTimestamp(UInt64(callback * 11_610)),
+                        output: outputList,
+                        outputTime: hostTimestamp(UInt64(callback * 11_610))
+                    )
+                }
+            }
+        }
+
+        XCTAssertEqual(processor.currentDiagnostics()?.path, .directAggregateClock)
+        XCTAssertGreaterThan(contentAnalyzers.appendedFrameCount(at: 44_100), 0)
+        XCTAssertEqual(contentAnalyzers.appendedFrameCount(at: 48_000), 0)
+    }
+
+    func testConvertedPathFeedsContentAnalysisAtInputRate() throws {
+        let contentAnalyzers = ContentAnalyzerRecorder()
+        let processor = try AudioIOProcessor(
+            inputFormat: floatFormat(sampleRate: 48_000, channelCount: 2),
+            outputFormat: floatFormat(sampleRate: 44_100, channelCount: 2),
+            settings: neutralSettings(),
+            speechAnalyzerFactory: { PendingSpeechAnalyzer(sampleRate: $0) },
+            contentAnalyzerFactory: { contentAnalyzers.make(sampleRate: $0) }
+        )
+        var input = Array(repeating: Float(0.125), count: 512 * 2)
+        var output = Array(repeating: Float.zero, count: 512 * 2)
+
+        for callback in 0..<4 {
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &output, channelCount: 2) { outputList in
+                    processor.process(
+                        input: inputList,
+                        inputTime: hostTimestamp(UInt64(callback * 10_667)),
+                        output: outputList,
+                        outputTime: hostTimestamp(UInt64(callback * 11_610))
+                    )
+                }
+            }
+        }
+
+        XCTAssertEqual(processor.currentDiagnostics()?.path, .sampleRateConverter)
+        XCTAssertEqual(contentAnalyzers.appendedFrameCount(at: 44_100), 0)
+        XCTAssertGreaterThan(contentAnalyzers.appendedFrameCount(at: 48_000), 0)
+    }
+
     func testRuntimeSpeechFailureClearsOutputAndReportsOnce() throws {
         let format = floatFormat(sampleRate: 48_000, channelCount: 2)
         let processor = try AudioIOProcessor(
@@ -868,6 +928,52 @@ private final class AnalyzerCreationRecorder: @unchecked Sendable {
     func append(_ value: Double) {
         lock.lock()
         storage.append(value)
+        lock.unlock()
+    }
+}
+
+private final class ContentAnalyzerRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var analyzers: [RecordingContentAnalyzer] = []
+
+    func make(sampleRate: Double) -> RecordingContentAnalyzer {
+        let analyzer = RecordingContentAnalyzer(sampleRate: sampleRate)
+        lock.lock()
+        analyzers.append(analyzer)
+        lock.unlock()
+        return analyzer
+    }
+
+    func appendedFrameCount(at sampleRate: Double) -> Int {
+        lock.lock()
+        let analyzer = analyzers.first { abs($0.sampleRate - sampleRate) < 0.5 }
+        lock.unlock()
+        return analyzer?.appendedFrameCount ?? 0
+    }
+}
+
+private final class RecordingContentAnalyzer: AudioContentAnalyzing, @unchecked Sendable {
+    let sampleRate: Double
+    let allowsUpwardGain = false
+    private let lock = NSLock()
+    private var storedAppendedFrameCount = 0
+
+    init(sampleRate: Double) {
+        self.sampleRate = sampleRate
+    }
+
+    var appendedFrameCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedAppendedFrameCount
+    }
+
+    func append(
+        input _: UnsafePointer<AudioBufferList>,
+        frameCount: Int
+    ) {
+        lock.lock()
+        storedAppendedFrameCount += frameCount
         lock.unlock()
     }
 }
