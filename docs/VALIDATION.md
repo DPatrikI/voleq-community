@@ -111,15 +111,18 @@ remained dry. The temporary content diagnostics were then removed.
   continuously leveled across the former -55 dB cutoff.
 - [x] MacBook speakers, device-wide capture: tested chill music remains dry while
   quiet speech remains amplified with the macOS content authority enabled.
-- [ ] MacBook speakers: static, microphone bump, clean speech, speech with
-  background noise, music, and quiet-to-loud transitions still need the full
-  scenario matrix.
-- [ ] Sennheiser HDB 630: regular playback and microphone-active call mode.
-- [ ] Apple AirPods Pro 2: regular playback and microphone-active call mode.
-- [ ] Confirm stationary noise and unrelated sounds remain unamplified across
+- [x] MacBook speakers: static, microphone bump, clean speech, speech with
+  background noise, music, and quiet-to-loud transitions.
+- [x] Sennheiser HDB 630: regular playback and microphone-active call mode.
+- [x] Apple AirPods Pro 2: regular playback and microphone-active call mode.
+- [x] Confirm stationary noise and unrelated sounds remain unamplified across
   the full scenario matrix.
-- [ ] Confirm music stays natural and loud speech still receives the accepted
+- [x] Confirm music stays natural and loud speech still receives the accepted
   downward reduction.
+
+The owner completed this physical listening matrix on 2026-07-31 after the
+macOS content-authority calibration. No robotic processing, intermittent music
+boost, or loss of quiet-speech leveling remained in the accepted build.
 
 ## Release validation backlog
 
