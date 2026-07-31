@@ -5,14 +5,13 @@ import VolEqSpeech
 
 struct SpeechLevelingGate {
     static let openProbability: Float = 0.65
+    static let quietOpenProbability: Float = 0.90
     static let closeProbability: Float = 0.35
-    static let quietOpenProbability: Float = 0.25
-    static let quietCloseProbability: Float = 0.10
     static let quietLevelMarginBelowThresholdDB: Float = 9
+    static let quietOpeningConfirmationSeconds: Float = 0.020
     static let absoluteSpeechFloorDB: Float = -80
-    static let noiseLearningProbability: Float = 0.10
+    static let noiseLearningProbability: Float = 0.20
     static let holdSeconds: Float = 0.200
-    static let quietHoldSeconds: Float = 0.600
     static let fadeSeconds: Float = 0.150
     static let noiseFloorTimeConstantSeconds: Float = 2
     static let noiseFloorMarginDB: Float = 6
@@ -21,8 +20,10 @@ struct SpeechLevelingGate {
     let sampleRate: Float
     private(set) var isOpen = false
     private(set) var learnedNoiseFloorDB: Float?
+    private(set) var openingBackfillSourceFrameCount = 0
     private var closingFrameCount = 0
-    private var usesQuietSpeechHold = false
+    private var quietOpeningFrameCount = 0
+    private var isQuietUtterance = false
 
     init(sampleRate: Float) {
         self.sampleRate = sampleRate
@@ -33,6 +34,7 @@ struct SpeechLevelingGate {
         fixedNoiseGateDB: Float,
         compressionThresholdDB: Float
     ) -> Float {
+        openingBackfillSourceFrameCount = 0
         let coveredFrames = max(result.sourceFrameCount, 1)
         let sourcePowerDB = 10 * log10f(max(result.sourcePower, 0.000_000_000_001))
 
@@ -61,35 +63,48 @@ struct SpeechLevelingGate {
         let isAboveAdaptiveSpeechGate = sourcePowerDB >= adaptiveSpeechGateDB
         let isQuiet = sourcePowerDB
             <= compressionThresholdDB - Self.quietLevelMarginBelowThresholdDB
-        let isQuietSpeechCandidate = isAboveFixedGate && isQuiet
-        let strongSpeechDetected = isAboveAdaptiveSpeechGate
+        let regularSpeechDetected = !isQuiet
+            && isAboveFixedGate
             && result.probability >= Self.openProbability
-        let quietSpeechDetected = isQuietSpeechCandidate
+        let quietSpeechCandidate = isQuiet
+            && isAboveAdaptiveSpeechGate
             && result.probability >= Self.quietOpenProbability
-        let shouldOpen = strongSpeechDetected || quietSpeechDetected
         let shouldRemainOpen = result.probability > Self.closeProbability
-            || (
-                isQuietSpeechCandidate
-                    && result.probability > Self.quietCloseProbability
-            )
 
-        if shouldOpen {
-            isOpen = true
-            usesQuietSpeechHold = isQuietSpeechCandidate
-                || (strongSpeechDetected && isQuiet)
-            closingFrameCount = 0
-        } else if isOpen, shouldRemainOpen {
+        if !isOpen {
+            if regularSpeechDetected {
+                isOpen = true
+                isQuietUtterance = false
+                quietOpeningFrameCount = 0
+                closingFrameCount = 0
+            } else if quietSpeechCandidate {
+                quietOpeningFrameCount += coveredFrames
+                let confirmationFrames = max(
+                    Int((Self.quietOpeningConfirmationSeconds * sampleRate).rounded()),
+                    coveredFrames
+                )
+                if quietOpeningFrameCount >= confirmationFrames {
+                    isOpen = true
+                    isQuietUtterance = true
+                    openingBackfillSourceFrameCount = quietOpeningFrameCount
+                    quietOpeningFrameCount = 0
+                    closingFrameCount = 0
+                }
+            } else {
+                quietOpeningFrameCount = 0
+            }
+        } else if regularSpeechDetected || quietSpeechCandidate || shouldRemainOpen {
             if isQuiet && isAboveAdaptiveSpeechGate {
-                usesQuietSpeechHold = true
+                isQuietUtterance = true
             }
             closingFrameCount = 0
-        } else if isOpen {
+        } else {
             closingFrameCount += coveredFrames
-            let holdFrames = activeHoldFrameCount
+            let holdFrames = Int((Self.holdSeconds * sampleRate).rounded())
             let fadeFrames = max(Int((Self.fadeSeconds * sampleRate).rounded()), 1)
             if closingFrameCount >= holdFrames + fadeFrames {
                 isOpen = false
-                usesQuietSpeechHold = false
+                isQuietUtterance = false
             }
         }
 
@@ -97,22 +112,19 @@ struct SpeechLevelingGate {
         if !isOpen {
             activityEligibility = 0
         } else {
-            let holdFrames = activeHoldFrameCount
+            let holdFrames = Int((Self.holdSeconds * sampleRate).rounded())
             let fadeFrames = max(Int((Self.fadeSeconds * sampleRate).rounded()), 1)
             let fadeFrameCount = max(closingFrameCount - holdFrames, 0)
             activityEligibility = 1 - min(Float(fadeFrameCount) / Float(fadeFrames), 1)
         }
 
-        let speechEvidenceIsActive = strongSpeechDetected
-            || quietSpeechDetected
+        let speechEvidenceIsActive = regularSpeechDetected
+            || quietSpeechCandidate
             || shouldRemainOpen
-        let quietSpeechHoldIsActive = isOpen && usesQuietSpeechHold
-        let adaptiveSpeechFloorIsActive = strongSpeechDetected
-            || (quietSpeechHoldIsActive && !isAboveFixedGate)
         let passesAudibilityGate: Bool
-        if adaptiveSpeechFloorIsActive {
-            passesAudibilityGate = isAboveAdaptiveSpeechGate
-        } else if speechEvidenceIsActive || quietSpeechHoldIsActive {
+        if isOpen && isQuietUtterance {
+            passesAudibilityGate = isAboveFixedGate || isAboveAdaptiveSpeechGate
+        } else if speechEvidenceIsActive {
             passesAudibilityGate = isAboveFixedGate
         } else {
             passesAudibilityGate = isAboveLearnedGate
@@ -135,12 +147,9 @@ struct SpeechLevelingGate {
     mutating func reset() {
         isOpen = false
         learnedNoiseFloorDB = nil
+        openingBackfillSourceFrameCount = 0
         closingFrameCount = 0
-        usesQuietSpeechHold = false
-    }
-
-    private var activeHoldFrameCount: Int {
-        let seconds = usesQuietSpeechHold ? Self.quietHoldSeconds : Self.holdSeconds
-        return Int((seconds * sampleRate).rounded())
+        quietOpeningFrameCount = 0
+        isQuietUtterance = false
     }
 }

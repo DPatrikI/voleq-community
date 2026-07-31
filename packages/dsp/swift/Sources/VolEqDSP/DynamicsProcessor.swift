@@ -28,6 +28,15 @@ public enum DynamicsProcessorError: Error, Equatable, LocalizedError {
     }
 }
 
+/// Supplies a real-time-safe, conservative permission for upward leveling.
+///
+/// Implementations may use slower platform analysis to distinguish speech from
+/// music, but this property must remain allocation-free and non-blocking because
+/// the audio callback reads it once per speech-analysis block.
+public protocol UpwardGainAuthorizing: AnyObject, Sendable {
+    var allowsUpwardGain: Bool { get }
+}
+
 /// A platform-neutral linked-stereo speech leveler followed by a safety limiter.
 ///
 /// Loud signals are compressed downward while audible quiet speech is compressed
@@ -54,6 +63,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
 
     private let sampleRate: Float
     private let speechAnalyzer: (any SpeechAnalyzing)?
+    private let upwardGainAuthorizer: (any UpwardGainAuthorizing)?
     private let appliesSpeechLeveling: Bool
     private let minimumLookaheadFrameCount: Int
     private let fixedSpeechLookaheadSeconds: Float?
@@ -83,6 +93,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
             sampleRate: sampleRate,
             settings: settings,
             speechAnalyzer: nil,
+            upwardGainAuthorizer: nil,
             appliesSpeechLeveling: false,
             minimumLookaheadFrameCount: 0
         )
@@ -95,12 +106,14 @@ public final class DynamicsProcessor: @unchecked Sendable {
     public convenience init(
         sampleRate: Double,
         settings: LevelingSettings = LevelingSettings(),
-        speechAnalyzer: any SpeechAnalyzing
+        speechAnalyzer: any SpeechAnalyzing,
+        upwardGainAuthorizer: (any UpwardGainAuthorizing)? = nil
     ) throws {
         try self.init(
             sampleRate: sampleRate,
             settings: settings,
             speechAnalyzer: speechAnalyzer,
+            upwardGainAuthorizer: upwardGainAuthorizer,
             appliesSpeechLeveling: true
         )
     }
@@ -109,6 +122,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         sampleRate: Double,
         settings: LevelingSettings = LevelingSettings(),
         speechAnalyzer: any SpeechAnalyzing,
+        upwardGainAuthorizer: (any UpwardGainAuthorizing)? = nil,
         appliesSpeechLeveling: Bool
     ) throws {
         let rate = Self.normalizedSampleRate(sampleRate)
@@ -133,6 +147,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
             sampleRate: sampleRate,
             settings: settings,
             speechAnalyzer: speechAnalyzer,
+            upwardGainAuthorizer: upwardGainAuthorizer,
             appliesSpeechLeveling: appliesSpeechLeveling,
             minimumLookaheadFrameCount: speechAnalyzer.analysisLatencyFrameCount
         )
@@ -142,6 +157,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         sampleRate: Double,
         settings: LevelingSettings,
         speechAnalyzer: (any SpeechAnalyzing)?,
+        upwardGainAuthorizer: (any UpwardGainAuthorizing)?,
         appliesSpeechLeveling: Bool,
         minimumLookaheadFrameCount: Int
     ) {
@@ -154,6 +170,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         )
         self.sampleRate = rate
         self.speechAnalyzer = speechAnalyzer
+        self.upwardGainAuthorizer = upwardGainAuthorizer
         self.appliesSpeechLeveling = appliesSpeechLeveling && speechAnalyzer != nil
         self.minimumLookaheadFrameCount = minimumLookaheadFrameCount
         fixedSpeechLookaheadSeconds = speechAnalyzer == nil
@@ -577,10 +594,22 @@ public final class DynamicsProcessor: @unchecked Sendable {
                 fixedNoiseGateDB: parameters.settings.noiseGateDB,
                 compressionThresholdDB: parameters.settings.thresholdDB
             )
-            currentUpwardEligibility = eligibility
+            let authorizedEligibility = upwardGainAuthorizer?.allowsUpwardGain == false
+                ? 0
+                : eligibility
+            currentUpwardEligibility = authorizedEligibility
+            let confirmedOpeningCoverage = result.analysisLatencyFrameCount
+                + max(
+                    speechGate.openingBackfillSourceFrameCount
+                        - result.sourceFrameCount,
+                    0
+                )
             backfillEligibility(
-                eligibility,
-                analysisLatencyFrameCount: result.analysisLatencyFrameCount
+                authorizedEligibility,
+                analysisLatencyFrameCount: min(
+                    confirmedOpeningCoverage,
+                    activeLookaheadFrameCount
+                )
             )
 
         }

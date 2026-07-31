@@ -53,8 +53,13 @@ let package = Package(
             path: "packages/dsp/swift/Sources/VolEqDSP"
         ),
         .target(
+            name: "CVolEqRealtime",
+            path: "platforms/macos/Sources/CVolEqRealtime",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "VolEqMacAudio",
-            dependencies: ["VolEqCore", "VolEqDSP", "VolEqSpeech"],
+            dependencies: ["VolEqCore", "VolEqDSP", "VolEqSpeech", "CVolEqRealtime"],
             path: "platforms/macos/Sources/VolEqMacAudio"
         ),
         .executableTarget(

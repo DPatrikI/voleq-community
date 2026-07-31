@@ -60,18 +60,15 @@ The open-source macOS application shell. It owns the Community interface, permis
   eligibility is stored beside delayed audio and transient caps; a result can
   backfill only the source frames it covers, so an opening syllable is preserved
   without granting upward gain to earlier unrelated sound.
-- Speech opens at probability 0.65 and remains open above 0.35. A quiet-speech
-  path also opens at 0.25 and remains open above 0.10, but only when the source
-  is at least 9 dB below the compression threshold and above the fixed safety
-  floor. High-confidence speech may extend below that fixed floor down to
-  -80 dB, but still requires 6 dB of clearance above the learned background.
-  Once a quiet utterance is open, that adaptive floor remains available when a
-  later syllable crosses the normal -55 dB cutoff. The regular path holds for
-  200 ms; quiet speech holds for 600 ms so low-confidence gaps between syllables
-  do not pump the gain. Both fade upward eligibility over 150 ms. The
-  background floor learns only at probability 0.10 or lower with a two-second
-  time constant. Classification never disables downward compression, lookahead
-  protection, or limiting.
+- Non-quiet speech opens at probability 0.65. Quiet audio requires probability
+  0.90 for two consecutive 10 ms blocks; the accepted 20 ms lookahead lets the
+  confirmed decision cover both blocks before they become audible. Once quiet
+  speech is open, it remains open above 0.35 and may extend below the normal
+  -55 dB floor down to -80 dB, but still requires 6 dB of clearance above the
+  learned background. Both paths hold for 200 ms, then fade upward eligibility
+  over 150 ms. The background floor learns only at probability 0.20 or lower
+  with a two-second time constant. Classification never disables downward
+  compression, lookahead protection, or limiting.
 - Speech decisions never snap the output gain at a 10 ms analysis boundary.
   Upward gain rises with a 30 ms per-sample slew. Its removal follows the gate's
   existing 150 ms eligibility fade, while zero eligibility enforces unity
@@ -79,6 +76,19 @@ The open-source macOS application shell. It owns the Community interface, permis
   lookahead protection. Disabling
   speech-aware leveling while stopped skips model and analyzer construction and
   uses the base leveler.
+- On macOS, RNNoise voice activity is checked by the operating system's offline
+  sound classifier before upward gain is permitted. Audio reaches that slower
+  classifier through a preallocated single-producer/single-consumer ring; only
+  an atomic permission bit crosses back into the real-time callback. The system
+  classifier uses 500 ms windows with 50% overlap. Two consecutive speech
+  results are required, so the beginning of a newly detected speaker remains dry
+  for roughly 750 ms rather than increasing the audio delay. Speech must score at
+  least 0.22 and at least 55% of the strongest music or instrument score. Music
+  closes permission immediately, uncertain results receive a four-result hold,
+  and a 500 ms input gap resets permission and marks a discontinuity in the
+  system analyzer timeline so pre-gap speech cannot influence newly starting
+  content. This platform adapter never changes downward compression, lookahead
+  protection, or limiting.
 - Model construction, latency inspection, reset, and settings mutation are
   control-thread operations. Only prepared sample processing is real-time safe.
   Non-finite analysis latches the processor in a silent failed state and publishes

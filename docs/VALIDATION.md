@@ -47,13 +47,16 @@ accepted, broader physical listening pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 75 passed |
+| Developer environment checks / Swift tests | 5 / 83 passed |
 | Pinned RNNoise / SpeexDSP revisions, BSD-3 licenses, and full-model checksum | Passed |
 | Real offline model loading and checksum rejection | Passed |
 | Probability bounds, finite RNNoise output, and resampler-aligned power metadata | Passed |
 | 10 ms frame accounting, fresh-state-equivalent reset, reported latency, and checkpointed 1,000-block drift at 16 / 44.1 / 48 kHz | Passed |
 | Deterministic open / hysteresis / 200 ms hold / 150 ms fade | Passed |
-| Quiet-speech low-confidence rescue, learned-floor override, and 600 ms hold without louder music gain | Passed |
+| Quiet music remains dry through isolated 99% classifier spikes; quiet speech requires two consecutive 90% blocks | Passed |
+| macOS content authority keeps RNNoise false positives dry until two system speech results agree | Passed |
+| Observed quiet-speech scores (26% / 39% and 61% / 29%) qualify while observed chill music (10% / 43%) remains dry | Passed |
+| A 500 ms input gap revokes stale speech permission before new content begins | Passed |
 | High-confidence speech below the fixed gate uses the learned-noise margin and receives gain | Passed |
 | First-syllable eligibility backfill without preceding-noise gain | Passed |
 | Per-sample speech-gain slew and analyzer-only parity with the base leveler | Passed |
@@ -91,12 +94,23 @@ fixed -55 dB cutoff: speech measured about -59.8 dB with 99% confidence and an
 speech floor and quiet hold removed that bouncing in owner listening. The
 temporary diagnostics were removed before commit.
 
+On 2026-07-31, owner testing found that RNNoise alone could classify instrumental
+music as speech and intermittently raise it. The macOS adapter now uses Apple's
+offline system sound classifier as a slower content authority without extending
+the 20 ms DSP delay. Temporary measurements separated accepted quiet speech
+(26% speech / 39% music and 61% / 29%) from rejected chill music (10% / 43%).
+After calibrating that comparison and resetting permission across input gaps,
+the owner confirmed that quiet speech was amplified while the tested chill music
+remained dry. The temporary content diagnostics were then removed.
+
 ### Listening gate
 
 - [x] MacBook speakers: speech-aware on/off and analyzer-only A/B are free of
   the robotic artifact after gain smoothing.
 - [x] MacBook speakers, device-wide capture: very quiet speech remains
   continuously leveled across the former -55 dB cutoff.
+- [x] MacBook speakers, device-wide capture: tested chill music remains dry while
+  quiet speech remains amplified with the macOS content authority enabled.
 - [ ] MacBook speakers: static, microphone bump, clean speech, speech with
   background noise, music, and quiet-to-loud transitions still need the full
   scenario matrix.

@@ -618,6 +618,7 @@ final class AudioIOProcessor {
 
     private let directDynamics: DynamicsProcessor
     private let conversionDynamics: DynamicsProcessor
+    private let contentAnalyzer: (any AudioContentAnalyzing)?
     private let sampleRateConverter: BufferedSampleRateConverter?
     private let diagnosticsLock = NSLock()
     private let failureLock = NSLock()
@@ -643,11 +644,24 @@ final class AudioIOProcessor {
         settings: LevelingSettings,
         speechAwarenessEnabled: Bool = true,
         speechModel: RNNoiseModelResource? = nil,
-        speechAnalyzerFactory: ((Double) throws -> any SpeechAnalyzing)? = nil
+        speechAnalyzerFactory: ((Double) throws -> any SpeechAnalyzing)? = nil,
+        contentAnalyzerFactory: ((Double) throws -> any AudioContentAnalyzing)? = nil,
+        systemContentAnalysisEnabled: Bool = false
     ) throws {
         inputSampleRate = inputFormat.mSampleRate
         outputSampleRate = outputFormat.mSampleRate
         if speechAwarenessEnabled {
+            let contentAnalyzer: (any AudioContentAnalyzing)?
+            if let contentAnalyzerFactory {
+                contentAnalyzer = try contentAnalyzerFactory(inputFormat.mSampleRate)
+            } else if systemContentAnalysisEnabled {
+                contentAnalyzer = try SystemAudioContentAnalyzer(
+                    sampleRate: inputFormat.mSampleRate
+                )
+            } else {
+                contentAnalyzer = nil
+            }
+            self.contentAnalyzer = contentAnalyzer
             let directAnalyzer: any SpeechAnalyzing
             let conversionAnalyzer: any SpeechAnalyzing
             if let speechAnalyzerFactory {
@@ -667,14 +681,17 @@ final class AudioIOProcessor {
             directDynamics = try DynamicsProcessor(
                 sampleRate: outputFormat.mSampleRate,
                 settings: settings,
-                speechAnalyzer: directAnalyzer
+                speechAnalyzer: directAnalyzer,
+                upwardGainAuthorizer: contentAnalyzer
             )
             conversionDynamics = try DynamicsProcessor(
                 sampleRate: inputFormat.mSampleRate,
                 settings: settings,
-                speechAnalyzer: conversionAnalyzer
+                speechAnalyzer: conversionAnalyzer,
+                upwardGainAuthorizer: contentAnalyzer
             )
         } else {
+            contentAnalyzer = nil
             directDynamics = DynamicsProcessor(
                 sampleRate: outputFormat.mSampleRate,
                 settings: settings
@@ -737,6 +754,7 @@ final class AudioIOProcessor {
             Self.clear(output: output)
             return
         }
+        contentAnalyzer?.append(input: input, frameCount: inputFrameCount)
 
         guard let sampleRateConverter else {
             recordDiagnosticsIfNeeded(

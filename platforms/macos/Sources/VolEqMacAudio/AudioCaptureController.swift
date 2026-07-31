@@ -243,7 +243,8 @@ public final class AudioCaptureController: ObservableObject {
                 outputFormat: outputFormat,
                 settings: levelingSettings,
                 speechAwarenessEnabled: speechAwarenessEnabled,
-                speechModel: speechModel
+                speechModel: speechModel,
+                systemContentAnalysisEnabled: speechAwarenessEnabled
             )
             audioProcessor = processor
             var newIOProcID: AudioDeviceIOProcID?

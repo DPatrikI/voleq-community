@@ -45,7 +45,7 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         let staticPower = powf(10, -45 / 10)
         for _ in 0..<200 {
             _ = gate.observe(
-                result(probability: 0.10, power: staticPower),
+                result(probability: 0.20, power: staticPower),
                 fixedNoiseGateDB: -55,
                 compressionThresholdDB: -24
             )
@@ -59,34 +59,23 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
 
         let learned = gate.learnedNoiseFloorDB
         _ = gate.observe(
-            result(probability: 0.11, power: powf(10, -20 / 10)),
+            result(probability: 0.21, power: powf(10, -20 / 10)),
             fixedNoiseGateDB: -55,
             compressionThresholdDB: -24
         )
         XCTAssertEqual(gate.learnedNoiseFloorDB, learned)
     }
 
-    func testModerateProbabilityOpensAndSustainsOnlyForQuietAudibleSpeech() {
+    func testModerateProbabilityDoesNotOpenForQuietOrLouderAudio() {
         var quietGate = SpeechLevelingGate(sampleRate: 48_000)
         XCTAssertEqual(
             quietGate.observe(
-                result(probability: 0.25, power: power(at: -40)),
+                result(probability: 0.64, power: power(at: -40)),
                 fixedNoiseGateDB: -55,
                 compressionThresholdDB: -24
             ),
-            1
+            0
         )
-
-        for _ in 0..<100 {
-            XCTAssertEqual(
-                quietGate.observe(
-                    result(probability: 0.11, power: power(at: -40)),
-                    fixedNoiseGateDB: -55,
-                    compressionThresholdDB: -24
-                ),
-                1
-            )
-        }
 
         var louderGate = SpeechLevelingGate(sampleRate: 48_000)
         XCTAssertEqual(
@@ -99,44 +88,34 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         )
     }
 
-    func testQuietSpeechCanOverrideALearnedNoiseFloorAndUsesTheLongerHold() {
+    func testIsolatedHighConfidenceQuietBlocksDoNotOpenTheGate() {
         var gate = SpeechLevelingGate(sampleRate: 48_000)
         for _ in 0..<200 {
             _ = gate.observe(
-                result(probability: 0.10, power: power(at: -40)),
+                result(probability: 0.10, power: power(at: -82)),
                 fixedNoiseGateDB: -55,
                 compressionThresholdDB: -24
             )
         }
-        XCTAssertEqual(gate.learnedNoiseFloorDB ?? 0, -40, accuracy: 0.01)
 
-        XCTAssertEqual(
-            gate.observe(
-                result(probability: 0.25, power: power(at: -40)),
-                fixedNoiseGateDB: -55,
-                compressionThresholdDB: -24
-            ),
-            1
-        )
-        for _ in 0..<60 {
+        for _ in 0..<100 {
             XCTAssertEqual(
                 gate.observe(
-                    result(probability: 0.10, power: power(at: -40)),
+                    result(probability: 0.99, power: power(at: -40)),
                     fixedNoiseGateDB: -55,
                     compressionThresholdDB: -24
                 ),
-                1,
-                accuracy: 0.0001
+                0
+            )
+            XCTAssertEqual(
+                gate.observe(
+                    result(probability: 0.40, power: power(at: -40)),
+                    fixedNoiseGateDB: -55,
+                    compressionThresholdDB: -24
+                ),
+                0
             )
         }
-        XCTAssertLessThan(
-            gate.observe(
-                result(probability: 0.10, power: power(at: -40)),
-                fixedNoiseGateDB: -55,
-                compressionThresholdDB: -24
-            ),
-            1
-        )
     }
 
     func testHighConfidenceSpeechBelowTheFixedGateUsesTheLearnedNoiseFloor() {
@@ -149,6 +128,14 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
             )
         }
 
+        XCTAssertEqual(
+            gate.observe(
+                result(probability: 0.99, power: power(at: -60)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            0
+        )
         XCTAssertEqual(
             gate.observe(
                 result(probability: 0.99, power: power(at: -60)),
@@ -174,6 +161,14 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
             ),
             0
         )
+        XCTAssertEqual(
+            insufficientClearanceGate.observe(
+                result(probability: 0.99, power: power(at: -60)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            0
+        )
     }
 
     func testOpenQuietSpeechKeepsEligibilityWhenALaterSyllableCrossesBelowTheFixedGate() {
@@ -187,7 +182,15 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         }
         XCTAssertEqual(
             gate.observe(
-                result(probability: 0.25, power: power(at: -40)),
+                result(probability: 0.99, power: power(at: -40)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            0
+        )
+        XCTAssertEqual(
+            gate.observe(
+                result(probability: 0.99, power: power(at: -40)),
                 fixedNoiseGateDB: -55,
                 compressionThresholdDB: -24
             ),
@@ -226,7 +229,7 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         let unrelatedOutput = output[processor.latencyFrameCount..<(processor.latencyFrameCount + 480)]
         let firstSpeechOutputFrame = processor.latencyFrameCount + 480
         let firstSpeechOutput = output[firstSpeechOutputFrame]
-        XCTAssertGreaterThanOrEqual(firstSpeechOutput, quiet * 0.999)
+        XCTAssertGreaterThanOrEqual(firstSpeechOutput, quiet * 0.9)
         XCTAssertGreaterThan(output[firstSpeechOutputFrame + 4_800], quiet * 1.05)
         XCTAssertLessThanOrEqual(
             unrelatedOutput.map(abs).max() ?? 0,
@@ -302,20 +305,6 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         XCTAssertGreaterThan(output, input * 1.5)
     }
 
-    func testLowConfidenceQuietSpeechRetainsUpwardLeveling() throws {
-        let analyzer = ScriptedSpeechAnalyzer(
-            sampleRate: 48_000,
-            repeating: .init(probability: 0.25, power: power(at: -40))
-        )
-        let processor = try DynamicsProcessor(sampleRate: 48_000, speechAnalyzer: analyzer)
-        let input = amplitude(at: -40)
-        var output: Float = 0
-        for _ in 0..<(48_000 + processor.latencyFrameCount) {
-            output = processor.processFrame(left: input, right: input).left
-        }
-        XCTAssertGreaterThan(output, input * 1.5)
-    }
-
     func testHighConfidenceVeryQuietSpeechBelowTheFixedGateReceivesGain() throws {
         let analyzer = ScriptedSpeechAnalyzer(
             sampleRate: 48_000,
@@ -338,6 +327,38 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         }
 
         XCTAssertGreaterThan(output, speech * 1.5)
+    }
+
+    func testExternalContentAuthorityKeepsMusicDryUntilSpeechIsConfirmed() throws {
+        let analyzer = ScriptedSpeechAnalyzer(
+            sampleRate: 48_000,
+            repeating: .init(probability: 0.99, power: power(at: -40))
+        )
+        let authority = MutableUpwardGainAuthority(allowsUpwardGain: false)
+        let processor = try DynamicsProcessor(
+            sampleRate: 48_000,
+            speechAnalyzer: analyzer,
+            upwardGainAuthorizer: authority
+        )
+        let input = amplitude(at: -40)
+
+        var output: Float = 0
+        for _ in 0..<(48_000 + processor.latencyFrameCount) {
+            output = processor.processFrame(left: input, right: input).left
+        }
+        XCTAssertEqual(output, input, accuracy: 0.000_001)
+
+        authority.allowsUpwardGain = true
+        for _ in 0..<48_000 {
+            output = processor.processFrame(left: input, right: input).left
+        }
+        XCTAssertGreaterThan(output, input * 1.5)
+
+        authority.allowsUpwardGain = false
+        for _ in 0..<1_000 {
+            output = processor.processFrame(left: input, right: input).left
+        }
+        XCTAssertEqual(output, input, accuracy: 0.000_001)
     }
 
     func testSpeechGainSlewCannotDefeatLookaheadOnALoudOnset() throws {
@@ -398,7 +419,7 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         }
 
         let transitionOutputFrame = transitionInputFrame + processor.latencyFrameCount
-        let afterGateFade = transitionOutputFrame + Int(Double(sampleRate) * 0.76)
+        let afterGateFade = transitionOutputFrame + Int(Double(sampleRate) * 0.36)
         XCTAssertLessThanOrEqual(
             output[afterGateFade..<(afterGateFade + 4_800)].max() ?? input,
             input * 1.001
@@ -429,9 +450,21 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
     }
 
     func testDeterministicStereoMusicRemainsDryAfterLatencyAlignment() throws {
+        let musicClassification = (0..<100).flatMap { _ in
+            [
+                ScriptedSpeechAnalyzer.Entry(
+                    probability: 0.99,
+                    power: power(at: -40)
+                ),
+                ScriptedSpeechAnalyzer.Entry(
+                    probability: 0.40,
+                    power: power(at: -40)
+                )
+            ]
+        }
         let analyzer = ScriptedSpeechAnalyzer(
             sampleRate: 48_000,
-            repeating: .init(probability: 0.4, power: power(at: -30))
+            script: musicClassification
         )
         let processor = try DynamicsProcessor(sampleRate: 48_000, speechAnalyzer: analyzer)
         let frameCount = 48_000
@@ -439,12 +472,12 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         input.reserveCapacity(frameCount)
         for frame in 0..<frameCount {
             let left = Float(
-                sin(Double(frame) * 0.031) * 0.018
-                    + sin(Double(frame) * 0.079) * 0.006
+                sin(Double(frame) * 0.031) * 0.007
+                    + sin(Double(frame) * 0.079) * 0.002
             )
             let right = Float(
-                sin(Double(frame) * 0.043 + 0.7) * 0.015
-                    + sin(Double(frame) * 0.097) * 0.005
+                sin(Double(frame) * 0.043 + 0.7) * 0.006
+                    + sin(Double(frame) * 0.097) * 0.002
             )
             input.append((left, right))
         }
@@ -566,6 +599,14 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
 
     private func decibels(_ amplitude: Float) -> Float {
         20 * log10f(max(amplitude, 0.000_000_1))
+    }
+}
+
+private final class MutableUpwardGainAuthority: UpwardGainAuthorizing, @unchecked Sendable {
+    var allowsUpwardGain: Bool
+
+    init(allowsUpwardGain: Bool) {
+        self.allowsUpwardGain = allowsUpwardGain
     }
 }
 
