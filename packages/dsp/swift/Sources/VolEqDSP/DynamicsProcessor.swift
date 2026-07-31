@@ -362,7 +362,8 @@ public final class DynamicsProcessor: @unchecked Sendable {
             }
             shapedDB = noiseGateDB
                 + (inputDB - noiseGateDB) * settings.expanderRatio
-        } else if inputDB < effectiveNoiseGateDB(settings: settings) {
+        } else if !appliesSpeechLeveling,
+                  inputDB < effectiveNoiseGateDB(settings: settings) {
             let noiseGateDB = effectiveNoiseGateDB(settings: settings)
             shapedDB = noiseGateDB
                 + (inputDB - noiseGateDB) * settings.expanderRatio
@@ -370,9 +371,9 @@ public final class DynamicsProcessor: @unchecked Sendable {
             let upwardTargetDB = settings.thresholdDB
                 + (inputDB - settings.thresholdDB) / settings.quietCompressionRatio
             let upwardBoostDB = max(0, upwardTargetDB - inputDB)
-            let gateOpen = smoothstep(
-                min(max((inputDB - settings.noiseGateDB) / 12, 0), 1)
-            )
+            let gateOpen: Float = appliesSpeechLeveling
+                ? 1
+                : smoothstep(min(max((inputDB - settings.noiseGateDB) / 12, 0), 1))
             let quietDepth = smoothstep(
                 min(max((settings.thresholdDB - inputDB) / 18, 0), 1)
             )

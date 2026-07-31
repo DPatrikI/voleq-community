@@ -42,17 +42,19 @@ The earlier Bluetooth routing implementation was listened to successfully on bot
 
 Branch: `feat/speech-aware-leveling`
 
-Automated status: complete on 2026-07-30; MacBook-speaker regression fix
+Automated status: complete on 2026-07-31; MacBook-speaker regression fixes
 accepted, broader physical listening pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 69 passed |
+| Developer environment checks / Swift tests | 5 / 75 passed |
 | Pinned RNNoise / SpeexDSP revisions, BSD-3 licenses, and full-model checksum | Passed |
 | Real offline model loading and checksum rejection | Passed |
 | Probability bounds, finite RNNoise output, and resampler-aligned power metadata | Passed |
 | 10 ms frame accounting, fresh-state-equivalent reset, reported latency, and checkpointed 1,000-block drift at 16 / 44.1 / 48 kHz | Passed |
 | Deterministic open / hysteresis / 200 ms hold / 150 ms fade | Passed |
+| Quiet-speech low-confidence rescue, learned-floor override, and 600 ms hold without louder music gain | Passed |
+| High-confidence speech below the fixed gate uses the learned-noise margin and receives gain | Passed |
 | First-syllable eligibility backfill without preceding-noise gain | Passed |
 | Per-sample speech-gain slew and analyzer-only parity with the base leveler | Passed |
 | Learned noise floor and static-noise no-boost guarantee | Passed |
@@ -83,17 +85,25 @@ confirmed on 2026-07-30 that all three diagnostic modes
 were free of the robotic artifact. The temporary analyzer-only UI control was
 then removed; the speech-aware on/off switch remains.
 
+On 2026-07-31, temporary diagnostics isolated quiet-speech gain bouncing to the
+fixed -55 dB cutoff: speech measured about -59.8 dB with 99% confidence and an
+-81.8 dB learned noise floor, yet upward eligibility was zero. The adaptive
+speech floor and quiet hold removed that bouncing in owner listening. The
+temporary diagnostics were removed before commit.
+
 ### Listening gate
 
 - [x] MacBook speakers: speech-aware on/off and analyzer-only A/B are free of
   the robotic artifact after gain smoothing.
+- [x] MacBook speakers, device-wide capture: very quiet speech remains
+  continuously leveled across the former -55 dB cutoff.
 - [ ] MacBook speakers: static, microphone bump, clean speech, speech with
   background noise, music, and quiet-to-loud transitions still need the full
   scenario matrix.
 - [ ] Sennheiser HDB 630: regular playback and microphone-active call mode.
 - [ ] Apple AirPods Pro 2: regular playback and microphone-active call mode.
-- [ ] Confirm quiet speech remains clear and louder without raising stationary
-  noise or unrelated sounds.
+- [ ] Confirm stationary noise and unrelated sounds remain unamplified across
+  the full scenario matrix.
 - [ ] Confirm music stays natural and loud speech still receives the accepted
   downward reduction.
 

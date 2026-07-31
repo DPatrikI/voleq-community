@@ -45,7 +45,7 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         let staticPower = powf(10, -45 / 10)
         for _ in 0..<200 {
             _ = gate.observe(
-                result(probability: 0.20, power: staticPower),
+                result(probability: 0.10, power: staticPower),
                 fixedNoiseGateDB: -55,
                 compressionThresholdDB: -24
             )
@@ -59,11 +59,148 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
 
         let learned = gate.learnedNoiseFloorDB
         _ = gate.observe(
-            result(probability: 0.21, power: powf(10, -20 / 10)),
+            result(probability: 0.11, power: powf(10, -20 / 10)),
             fixedNoiseGateDB: -55,
             compressionThresholdDB: -24
         )
         XCTAssertEqual(gate.learnedNoiseFloorDB, learned)
+    }
+
+    func testModerateProbabilityOpensAndSustainsOnlyForQuietAudibleSpeech() {
+        var quietGate = SpeechLevelingGate(sampleRate: 48_000)
+        XCTAssertEqual(
+            quietGate.observe(
+                result(probability: 0.25, power: power(at: -40)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            1
+        )
+
+        for _ in 0..<100 {
+            XCTAssertEqual(
+                quietGate.observe(
+                    result(probability: 0.11, power: power(at: -40)),
+                    fixedNoiseGateDB: -55,
+                    compressionThresholdDB: -24
+                ),
+                1
+            )
+        }
+
+        var louderGate = SpeechLevelingGate(sampleRate: 48_000)
+        XCTAssertEqual(
+            louderGate.observe(
+                result(probability: 0.40, power: power(at: -30)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            0
+        )
+    }
+
+    func testQuietSpeechCanOverrideALearnedNoiseFloorAndUsesTheLongerHold() {
+        var gate = SpeechLevelingGate(sampleRate: 48_000)
+        for _ in 0..<200 {
+            _ = gate.observe(
+                result(probability: 0.10, power: power(at: -40)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            )
+        }
+        XCTAssertEqual(gate.learnedNoiseFloorDB ?? 0, -40, accuracy: 0.01)
+
+        XCTAssertEqual(
+            gate.observe(
+                result(probability: 0.25, power: power(at: -40)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            1
+        )
+        for _ in 0..<60 {
+            XCTAssertEqual(
+                gate.observe(
+                    result(probability: 0.10, power: power(at: -40)),
+                    fixedNoiseGateDB: -55,
+                    compressionThresholdDB: -24
+                ),
+                1,
+                accuracy: 0.0001
+            )
+        }
+        XCTAssertLessThan(
+            gate.observe(
+                result(probability: 0.10, power: power(at: -40)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            1
+        )
+    }
+
+    func testHighConfidenceSpeechBelowTheFixedGateUsesTheLearnedNoiseFloor() {
+        var gate = SpeechLevelingGate(sampleRate: 48_000)
+        for _ in 0..<200 {
+            _ = gate.observe(
+                result(probability: 0.10, power: power(at: -82)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            )
+        }
+
+        XCTAssertEqual(
+            gate.observe(
+                result(probability: 0.99, power: power(at: -60)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            1
+        )
+
+        var insufficientClearanceGate = SpeechLevelingGate(sampleRate: 48_000)
+        for _ in 0..<200 {
+            _ = insufficientClearanceGate.observe(
+                result(probability: 0.10, power: power(at: -62)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            )
+        }
+        XCTAssertEqual(
+            insufficientClearanceGate.observe(
+                result(probability: 0.99, power: power(at: -60)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            0
+        )
+    }
+
+    func testOpenQuietSpeechKeepsEligibilityWhenALaterSyllableCrossesBelowTheFixedGate() {
+        var gate = SpeechLevelingGate(sampleRate: 48_000)
+        for _ in 0..<200 {
+            _ = gate.observe(
+                result(probability: 0.10, power: power(at: -82)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            )
+        }
+        XCTAssertEqual(
+            gate.observe(
+                result(probability: 0.25, power: power(at: -40)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            1
+        )
+        XCTAssertEqual(
+            gate.observe(
+                result(probability: 0.20, power: power(at: -60)),
+                fixedNoiseGateDB: -55,
+                compressionThresholdDB: -24
+            ),
+            1
+        )
     }
 
     func testFirstSpeechBlockIsBackfilledInsideLookahead() throws {
@@ -165,6 +302,44 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         XCTAssertGreaterThan(output, input * 1.5)
     }
 
+    func testLowConfidenceQuietSpeechRetainsUpwardLeveling() throws {
+        let analyzer = ScriptedSpeechAnalyzer(
+            sampleRate: 48_000,
+            repeating: .init(probability: 0.25, power: power(at: -40))
+        )
+        let processor = try DynamicsProcessor(sampleRate: 48_000, speechAnalyzer: analyzer)
+        let input = amplitude(at: -40)
+        var output: Float = 0
+        for _ in 0..<(48_000 + processor.latencyFrameCount) {
+            output = processor.processFrame(left: input, right: input).left
+        }
+        XCTAssertGreaterThan(output, input * 1.5)
+    }
+
+    func testHighConfidenceVeryQuietSpeechBelowTheFixedGateReceivesGain() throws {
+        let analyzer = ScriptedSpeechAnalyzer(
+            sampleRate: 48_000,
+            script: Array(
+                repeating: .init(probability: 0.10, power: power(at: -82)),
+                count: 200
+            ),
+            repeating: .init(probability: 0.99, power: power(at: -60))
+        )
+        let processor = try DynamicsProcessor(sampleRate: 48_000, speechAnalyzer: analyzer)
+        let noise = amplitude(at: -82)
+        let speech = amplitude(at: -60)
+        var output: Float = 0
+
+        for _ in 0..<(48_000 * 2) {
+            _ = processor.processFrame(left: noise, right: noise)
+        }
+        for _ in 0..<(48_000 + processor.latencyFrameCount) {
+            output = processor.processFrame(left: speech, right: speech).left
+        }
+
+        XCTAssertGreaterThan(output, speech * 1.5)
+    }
+
     func testSpeechGainSlewCannotDefeatLookaheadOnALoudOnset() throws {
         let sampleRate = 48_000
         let analyzer = ScriptedSpeechAnalyzer(
@@ -223,7 +398,7 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         }
 
         let transitionOutputFrame = transitionInputFrame + processor.latencyFrameCount
-        let afterGateFade = transitionOutputFrame + Int(Double(sampleRate) * 0.36)
+        let afterGateFade = transitionOutputFrame + Int(Double(sampleRate) * 0.76)
         XCTAssertLessThanOrEqual(
             output[afterGateFade..<(afterGateFade + 4_800)].max() ?? input,
             input * 1.001

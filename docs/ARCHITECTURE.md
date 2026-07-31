@@ -60,11 +60,18 @@ The open-source macOS application shell. It owns the Community interface, permis
   eligibility is stored beside delayed audio and transient caps; a result can
   backfill only the source frames it covers, so an opening syllable is preserved
   without granting upward gain to earlier unrelated sound.
-- Speech opens at probability 0.65, remains open above 0.35, holds for 200 ms,
-  then fades upward-gain eligibility over 150 ms. The background floor learns
-  only at probability 0.20 or lower with a two-second time constant. Upward gain
-  also requires 6 dB of clearance above that floor. Classification never disables
-  downward compression, lookahead protection, or limiting.
+- Speech opens at probability 0.65 and remains open above 0.35. A quiet-speech
+  path also opens at 0.25 and remains open above 0.10, but only when the source
+  is at least 9 dB below the compression threshold and above the fixed safety
+  floor. High-confidence speech may extend below that fixed floor down to
+  -80 dB, but still requires 6 dB of clearance above the learned background.
+  Once a quiet utterance is open, that adaptive floor remains available when a
+  later syllable crosses the normal -55 dB cutoff. The regular path holds for
+  200 ms; quiet speech holds for 600 ms so low-confidence gaps between syllables
+  do not pump the gain. Both fade upward eligibility over 150 ms. The
+  background floor learns only at probability 0.10 or lower with a two-second
+  time constant. Classification never disables downward compression, lookahead
+  protection, or limiting.
 - Speech decisions never snap the output gain at a 10 ms analysis boundary.
   Upward gain rises with a 30 ms per-sample slew. Its removal follows the gate's
   existing 150 ms eligibility fade, while zero eligibility enforces unity
