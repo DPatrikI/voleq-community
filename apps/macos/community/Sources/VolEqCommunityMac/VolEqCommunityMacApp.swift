@@ -2,14 +2,30 @@
 
 import AppKit
 import CoreAudio
+import Darwin
 import SwiftUI
 import VolEqMacAudio
+import VolEqSpeech
 
 @main
 @available(macOS 14.2, *)
 struct VolEqCommunityMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var audio = AudioCaptureController()
+    @StateObject private var audio: AudioCaptureController
+
+    init() {
+        if ProcessInfo.processInfo.arguments.contains("--verify-speech-resources") {
+            do {
+                _ = try RNNoiseModelResource.bundled()
+                print("[ok] packaged RNNoise model loaded")
+                exit(EXIT_SUCCESS)
+            } catch {
+                FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
+                exit(EXIT_FAILURE)
+            }
+        }
+        _audio = StateObject(wrappedValue: AudioCaptureController())
+    }
 
     var body: some Scene {
         WindowGroup("VolEq Community") {
@@ -52,6 +68,16 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .disabled(audio.isRunning)
+
+            Toggle("Speech-aware leveling", isOn: $audio.speechAwarenessEnabled)
+                .disabled(audio.isRunning)
+            Text(
+                audio.speechAwarenessEnabled
+                    ? "On: quiet gain is limited to detected speech."
+                    : "Off: uses the leveler without speech recognition."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             if audio.mode == .application {
                 HStack {

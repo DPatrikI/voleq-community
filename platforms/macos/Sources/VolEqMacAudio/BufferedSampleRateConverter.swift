@@ -4,10 +4,12 @@ import AudioToolbox
 import Foundation
 import VolEqCore
 import VolEqDSP
+import VolEqSpeech
 
 private let converterNeedsMoreInput = OSStatus(bitPattern: 0x564E_4441) // 'VNDA'
 private let converterOutputUnderrun = OSStatus(bitPattern: 0x564F_5552) // 'VOUR'
 private let callbackTimingUnavailable = OSStatus(bitPattern: 0x5643_544D) // 'VCTM'
+let speechAnalysisFailed = OSStatus(bitPattern: 0x5653_5048) // 'VSPH'
 
 /// A fixed-capacity, interleaved stereo FIFO used only by the audio callback.
 ///
@@ -380,11 +382,11 @@ final class BufferedSampleRateConverter {
     func appendProcessedInput(
         _ inputList: UnsafePointer<AudioBufferList>,
         processor: DynamicsProcessor
-    ) {
+    ) -> Bool {
         let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputList))
         let channelCount = totalChannelCount(in: inputs)
         let frameCount = minimumAvailableFrameCount(in: inputs)
-        guard channelCount > 0, frameCount > 0 else { return }
+        guard channelCount > 0, frameCount > 0 else { return true }
 
         processor.beginAudioBuffer()
         for frame in 0..<frameCount {
@@ -397,6 +399,7 @@ final class BufferedSampleRateConverter {
             let processed = processor.processFrame(left: left, right: right)
             inputRingBuffer.append(left: processed.left, right: processed.right)
         }
+        return !processor.consumeProcessingFailure()
     }
 
     func fillOutput(
@@ -610,30 +613,117 @@ final class AudioIOProcessor {
     let usesSampleRateConversion: Bool
     let inputSampleRate: Double
     let outputSampleRate: Double
+    let directProcessingLatencyFrameCount: Int
+    let conversionProcessingLatencyFrameCount: Int
 
     private let directDynamics: DynamicsProcessor
     private let conversionDynamics: DynamicsProcessor
+    private let directContentAnalyzer: (any AudioContentAnalyzing)?
+    private let conversionContentAnalyzer: (any AudioContentAnalyzing)?
     private let sampleRateConverter: BufferedSampleRateConverter?
-    private let onConversionFailure: @Sendable (OSStatus) -> Void
     private let diagnosticsLock = NSLock()
+    private let failureLock = NSLock()
     private var sharedDiagnostics: AudioIOProcessingDiagnostics?
+    private var pendingFailureStatus: OSStatus?
     private var cadenceAnalyzer: AudioCallbackCadenceAnalyzer?
     private var selectedPath: AudioSampleRatePath?
     /// Written only by the serial audio callback; avoids a lock attempt per period.
     private var diagnosticsRecorded = false
-    private var reportedConversionFailure = false
+    private var publishedFailure = false
+
+    private static let sharedSpeechModel = Result<RNNoiseModelResource, Error> {
+        try RNNoiseModelResource.bundled()
+    }
+
+    static func loadSpeechModel() throws -> RNNoiseModelResource {
+        try sharedSpeechModel.get()
+    }
 
     init(
         inputFormat: AudioStreamBasicDescription,
         outputFormat: AudioStreamBasicDescription,
         settings: LevelingSettings,
-        onConversionFailure: @escaping @Sendable (OSStatus) -> Void = { _ in }
+        speechAwarenessEnabled: Bool = true,
+        speechModel: RNNoiseModelResource? = nil,
+        speechAnalyzerFactory: ((Double) throws -> any SpeechAnalyzing)? = nil,
+        contentAnalyzerFactory: ((Double) throws -> any AudioContentAnalyzing)? = nil,
+        systemContentAnalysisEnabled: Bool = false
     ) throws {
         inputSampleRate = inputFormat.mSampleRate
         outputSampleRate = outputFormat.mSampleRate
-        directDynamics = DynamicsProcessor(sampleRate: outputFormat.mSampleRate, settings: settings)
-        conversionDynamics = DynamicsProcessor(sampleRate: inputFormat.mSampleRate, settings: settings)
-        self.onConversionFailure = onConversionFailure
+        if speechAwarenessEnabled {
+            let directContentAnalyzer: (any AudioContentAnalyzing)?
+            let conversionContentAnalyzer: (any AudioContentAnalyzing)?
+            if let contentAnalyzerFactory {
+                directContentAnalyzer = try contentAnalyzerFactory(
+                    outputFormat.mSampleRate
+                )
+                if abs(inputFormat.mSampleRate - outputFormat.mSampleRate) < 1 {
+                    conversionContentAnalyzer = directContentAnalyzer
+                } else {
+                    conversionContentAnalyzer = try contentAnalyzerFactory(
+                        inputFormat.mSampleRate
+                    )
+                }
+            } else if systemContentAnalysisEnabled {
+                directContentAnalyzer = try SystemAudioContentAnalyzer(
+                    sampleRate: outputFormat.mSampleRate
+                )
+                if abs(inputFormat.mSampleRate - outputFormat.mSampleRate) < 1 {
+                    conversionContentAnalyzer = directContentAnalyzer
+                } else {
+                    conversionContentAnalyzer = try SystemAudioContentAnalyzer(
+                        sampleRate: inputFormat.mSampleRate
+                    )
+                }
+            } else {
+                directContentAnalyzer = nil
+                conversionContentAnalyzer = nil
+            }
+            self.directContentAnalyzer = directContentAnalyzer
+            self.conversionContentAnalyzer = conversionContentAnalyzer
+            let directAnalyzer: any SpeechAnalyzing
+            let conversionAnalyzer: any SpeechAnalyzing
+            if let speechAnalyzerFactory {
+                directAnalyzer = try speechAnalyzerFactory(outputFormat.mSampleRate)
+                conversionAnalyzer = try speechAnalyzerFactory(inputFormat.mSampleRate)
+            } else {
+                let model = try speechModel ?? Self.loadSpeechModel()
+                directAnalyzer = try RNNoiseSpeechAnalyzer(
+                    sampleRate: outputFormat.mSampleRate,
+                    model: model
+                )
+                conversionAnalyzer = try RNNoiseSpeechAnalyzer(
+                    sampleRate: inputFormat.mSampleRate,
+                    model: model
+                )
+            }
+            directDynamics = try DynamicsProcessor(
+                sampleRate: outputFormat.mSampleRate,
+                settings: settings,
+                speechAnalyzer: directAnalyzer,
+                upwardGainAuthorizer: directContentAnalyzer
+            )
+            conversionDynamics = try DynamicsProcessor(
+                sampleRate: inputFormat.mSampleRate,
+                settings: settings,
+                speechAnalyzer: conversionAnalyzer,
+                upwardGainAuthorizer: conversionContentAnalyzer
+            )
+        } else {
+            directContentAnalyzer = nil
+            conversionContentAnalyzer = nil
+            directDynamics = DynamicsProcessor(
+                sampleRate: outputFormat.mSampleRate,
+                settings: settings
+            )
+            conversionDynamics = DynamicsProcessor(
+                sampleRate: inputFormat.mSampleRate,
+                settings: settings
+            )
+        }
+        directProcessingLatencyFrameCount = directDynamics.latencyFrameCount
+        conversionProcessingLatencyFrameCount = conversionDynamics.latencyFrameCount
         if abs(inputFormat.mSampleRate - outputFormat.mSampleRate) >= 1 {
             sampleRateConverter = try BufferedSampleRateConverter(
                 inputSampleRate: inputFormat.mSampleRate,
@@ -663,6 +753,15 @@ final class AudioIOProcessor {
         return sharedDiagnostics
     }
 
+    /// Called by a control-thread monitor. Never call this from the audio callback.
+    func takePendingFailure() -> OSStatus? {
+        failureLock.lock()
+        defer { failureLock.unlock() }
+        let failure = pendingFailureStatus
+        pendingFailureStatus = nil
+        return failure
+    }
+
     func process(
         input: UnsafePointer<AudioBufferList>,
         inputTime: AudioTimeStamp? = nil,
@@ -676,14 +775,21 @@ final class AudioIOProcessor {
             Self.clear(output: output)
             return
         }
-
         guard let sampleRateConverter else {
+            directContentAnalyzer?.append(
+                input: input,
+                frameCount: inputFrameCount
+            )
             recordDiagnosticsIfNeeded(
                 path: .directAggregateClock,
                 inputFrameCount: inputFrameCount,
                 outputFrameCount: outputFrameCount
             )
-            directDynamics.process(input: input, output: output)
+            guard directDynamics.process(input: input, output: output) else {
+                Self.clear(output: output)
+                reportConversionFailureIfNeeded(speechAnalysisFailed)
+                return
+            }
             return
         }
 
@@ -723,11 +829,27 @@ final class AudioIOProcessor {
         )
 
         guard path == .sampleRateConverter else {
-            directDynamics.process(input: input, output: output)
+            directContentAnalyzer?.append(
+                input: input,
+                frameCount: inputFrameCount
+            )
+            guard directDynamics.process(input: input, output: output) else {
+                Self.clear(output: output)
+                reportConversionFailureIfNeeded(speechAnalysisFailed)
+                return
+            }
             return
         }
 
-        sampleRateConverter.appendProcessedInput(input, processor: conversionDynamics)
+        conversionContentAnalyzer?.append(
+            input: input,
+            frameCount: inputFrameCount
+        )
+        guard sampleRateConverter.appendProcessedInput(input, processor: conversionDynamics) else {
+            Self.clear(output: output)
+            reportConversionFailureIfNeeded(speechAnalysisFailed)
+            return
+        }
         let result = sampleRateConverter.fillOutput(output)
         if let errorStatus = result.errorStatus {
             reportConversionFailureIfNeeded(errorStatus)
@@ -735,9 +857,11 @@ final class AudioIOProcessor {
     }
 
     private func reportConversionFailureIfNeeded(_ status: OSStatus) {
-        guard !reportedConversionFailure else { return }
-        reportedConversionFailure = true
-        onConversionFailure(status)
+        guard !publishedFailure, failureLock.try() else { return }
+        defer { failureLock.unlock() }
+        guard pendingFailureStatus == nil else { return }
+        pendingFailureStatus = status
+        publishedFailure = true
     }
 
     private func recordDiagnosticsIfNeeded(
