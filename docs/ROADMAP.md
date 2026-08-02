@@ -15,12 +15,11 @@
   MacBook listening accepted, broader device matrix pending] Gate upward
   leveling with fully offline speech probability, a learned noise floor, and a
   macOS system-classifier content check;
-- [Implemented and merged; 119 automated tests, optimized CPU gate, and owner
+- [Implemented and merged; 117 automated tests, optimized CPU gate, and owner
   listening on MacBook speakers plus two Bluetooth devices pass; soak and broader
   device matrix pending] Reuse stereo RNNoise
   output for automatic mild suppression only
-  during authorized noisy speech, with a separate before-start Community toggle
-  that preserves speech-aware leveling when suppression is off. The
+  during authorized noisy speech whenever speech-aware leveling is enabled. The
   measured 48 kHz stereo cost is 4.33%–4.37% of one core across five post-review release
   runs on the development Mac, within the 5% target. The owner accepted 30 ms
   at 48 kHz on 2026-07-31 so the

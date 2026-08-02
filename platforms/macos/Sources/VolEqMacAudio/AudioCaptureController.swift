@@ -30,7 +30,6 @@ public final class AudioCaptureController: ObservableObject {
     @Published public var selectedProcessID: AudioObjectID?
     @Published public var mode: CaptureMode = .application
     @Published public var speechAwarenessEnabled = true
-    @Published public var noiseSuppressionEnabled = true
     @Published public var levelingSettings = LevelingSettings() {
         didSet { audioProcessor?.updateSettings(levelingSettings) }
     }
@@ -254,7 +253,6 @@ public final class AudioCaptureController: ObservableObject {
                 outputFormat: outputFormat,
                 settings: levelingSettings,
                 speechAwarenessEnabled: speechAwarenessEnabled,
-                noiseSuppressionEnabled: noiseSuppressionEnabled,
                 speechModel: speechModel,
                 systemContentAnalysisEnabled: speechAwarenessEnabled
             )
