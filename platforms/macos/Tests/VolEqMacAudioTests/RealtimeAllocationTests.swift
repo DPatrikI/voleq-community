@@ -10,45 +10,97 @@ import VolEqSpeech
 
 final class RealtimeAllocationTests: XCTestCase {
     func testFirstAndWarmedStereoProcessingAreAllocationFree() throws {
-        try assertAllocationFree(warmupFrameCount: 0)
-        try assertAllocationFree(warmupFrameCount: 4_800)
+        for sampleRate in [16_000.0, 44_100.0, 48_000.0] {
+            try assertAllocationFree(
+                sampleRate: sampleRate,
+                warmupFrameCount: 0
+            )
+            try assertAllocationFree(
+                sampleRate: sampleRate,
+                warmupFrameCount: Int(sampleRate / 10)
+            )
+        }
     }
 
     func testDirectAudioCallbacksAreAllocationFree() throws {
-        let format = floatFormat(sampleRate: 48_000)
-        let processor = try AudioIOProcessor(
-            inputFormat: format,
-            outputFormat: format,
-            settings: neutralSettings(),
-            systemContentAnalysisEnabled: true
-        )
-        XCTAssertEqual(processAllocationCount(processor: processor), 0)
-        for _ in 0..<8 { _ = processAllocationCount(processor: processor, tracks: false) }
-        XCTAssertEqual(processAllocationCount(processor: processor), 0)
-    }
-
-    func testFirstResolvedAndWarmedConvertedCallbacksAreAllocationFree() throws {
-        let processor = try AudioIOProcessor(
-            inputFormat: floatFormat(sampleRate: 48_000),
-            outputFormat: floatFormat(sampleRate: 44_100),
-            settings: neutralSettings(),
-            systemContentAnalysisEnabled: true
-        )
-        for callback in 0..<3 {
+        for sampleRate in [16_000.0, 44_100.0, 48_000.0] {
+            let format = floatFormat(sampleRate: sampleRate)
+            let processor = try AudioIOProcessor(
+                inputFormat: format,
+                outputFormat: format,
+                settings: neutralSettings(),
+                systemContentAnalysisEnabled: true
+            )
             XCTAssertEqual(
-                processAllocationCount(processor: processor, callback: callback),
+                processAllocationCount(
+                    processor: processor,
+                    inputSampleRate: sampleRate,
+                    outputSampleRate: sampleRate
+                ),
+                0
+            )
+            for callback in 1..<9 {
+                _ = processAllocationCount(
+                    processor: processor,
+                    callback: callback,
+                    inputSampleRate: sampleRate,
+                    outputSampleRate: sampleRate,
+                    tracks: false
+                )
+            }
+            XCTAssertEqual(
+                processAllocationCount(
+                    processor: processor,
+                    callback: 9,
+                    inputSampleRate: sampleRate,
+                    outputSampleRate: sampleRate
+                ),
                 0
             )
         }
-        XCTAssertEqual(processAllocationCount(processor: processor, callback: 3), 0)
-        for callback in 4..<12 {
-            _ = processAllocationCount(
-                processor: processor,
-                callback: callback,
-                tracks: false
+    }
+
+    func testFirstResolvedAndWarmedConvertedCallbacksAreAllocationFree() throws {
+        for (inputSampleRate, outputSampleRate) in [
+            (48_000.0, 44_100.0),
+            (44_100.0, 48_000.0),
+        ] {
+            let processor = try AudioIOProcessor(
+                inputFormat: floatFormat(sampleRate: inputSampleRate),
+                outputFormat: floatFormat(sampleRate: outputSampleRate),
+                settings: neutralSettings(),
+                systemContentAnalysisEnabled: true
+            )
+            for callback in 0..<4 {
+                XCTAssertEqual(
+                    processAllocationCount(
+                        processor: processor,
+                        callback: callback,
+                        inputSampleRate: inputSampleRate,
+                        outputSampleRate: outputSampleRate
+                    ),
+                    0
+                )
+            }
+            for callback in 4..<12 {
+                _ = processAllocationCount(
+                    processor: processor,
+                    callback: callback,
+                    inputSampleRate: inputSampleRate,
+                    outputSampleRate: outputSampleRate,
+                    tracks: false
+                )
+            }
+            XCTAssertEqual(
+                processAllocationCount(
+                    processor: processor,
+                    callback: 12,
+                    inputSampleRate: inputSampleRate,
+                    outputSampleRate: outputSampleRate
+                ),
+                0
             )
         }
-        XCTAssertEqual(processAllocationCount(processor: processor, callback: 12), 0)
     }
 
     func testSuppressionDisabledDirectCallbacksAreAllocationFree() throws {
@@ -145,11 +197,14 @@ final class RealtimeAllocationTests: XCTestCase {
         XCTAssertEqual(recorder.sampleRates, [48_000, 48_000])
     }
 
-    private func assertAllocationFree(warmupFrameCount: Int) throws {
+    private func assertAllocationFree(
+        sampleRate: Double,
+        warmupFrameCount: Int
+    ) throws {
         let model = try RNNoiseModelResource.bundled()
-        let speech = try RNNoiseStereoProcessor(sampleRate: 48_000, model: model)
+        let speech = try RNNoiseStereoProcessor(sampleRate: sampleRate, model: model)
         let processor = try DynamicsProcessor(
-            sampleRate: 48_000,
+            sampleRate: sampleRate,
             stereoSpeechProcessor: speech
         )
         for frame in 0..<warmupFrameCount {
@@ -171,13 +226,18 @@ final class RealtimeAllocationTests: XCTestCase {
     private func processAllocationCount(
         processor: AudioIOProcessor,
         callback: Int = 0,
+        inputSampleRate: Double = 48_000,
+        outputSampleRate: Double = 44_100,
         tracks: Bool = true
     ) -> Int {
-        var input = (0..<512).flatMap { frame -> [Float] in
-            let sample = Float(sin(Double(frame + callback * 512) * 0.043)) * 0.05
+        let frameCount = 512
+        var input = (0..<frameCount).flatMap { frame -> [Float] in
+            let sample = Float(
+                sin(Double(frame + callback * frameCount) * 0.043)
+            ) * 0.05
             return [sample, sample]
         }
-        var output = [Float](repeating: 0, count: 1_024)
+        var output = [Float](repeating: 0, count: frameCount * 2)
         var allocationCount = 0
         input.withUnsafeMutableBytes { inputBytes in
             output.withUnsafeMutableBytes { outputBytes in
@@ -198,10 +258,16 @@ final class RealtimeAllocationTests: XCTestCase {
                     )
                 )
                 var inputTime = AudioTimeStamp()
-                inputTime.mHostTime = UInt64(callback * 10_667)
+                inputTime.mHostTime = UInt64(callback) * hostTimeIncrement(
+                    frameCount: frameCount,
+                    sampleRate: inputSampleRate
+                )
                 inputTime.mFlags = .hostTimeValid
                 var outputTime = AudioTimeStamp()
-                outputTime.mHostTime = UInt64(callback * 11_610)
+                outputTime.mHostTime = UInt64(callback) * hostTimeIncrement(
+                    frameCount: frameCount,
+                    sampleRate: outputSampleRate
+                )
                 outputTime.mFlags = .hostTimeValid
                 if tracks { voleq_test_allocation_tracking_begin() }
                 processor.process(
@@ -216,6 +282,10 @@ final class RealtimeAllocationTests: XCTestCase {
             }
         }
         return allocationCount
+    }
+
+    private func hostTimeIncrement(frameCount: Int, sampleRate: Double) -> UInt64 {
+        UInt64((Double(frameCount) * 1_000_000 / sampleRate).rounded())
     }
 
     private func floatFormat(sampleRate: Double) -> AudioStreamBasicDescription {
