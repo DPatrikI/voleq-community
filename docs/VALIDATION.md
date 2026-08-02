@@ -130,9 +130,7 @@ was split between the direct output clock and converted input clock.
 
 ## Mild noise suppression
 
-Branch: `perf/rnnoise-cpu`
-
-Automated status: 119 Swift tests pass on 2026-08-02, including authorization,
+Automated status: 117 Swift tests pass on 2026-08-02, including authorization,
 right-only, anti-phase, reset, allocation, 30 ms latency, real-model marker
 alignment, noise reduction, speech projection, stereo balance, and clean-speech
 transparency. Five final CPU runs pass the unchanged 5% gate. Owner listening of
@@ -142,8 +140,8 @@ acceptance remains pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 119 passed |
-| Separate suppression toggle | Off matches the accepted mono speech-aware path sample-for-sample on direct and two-way converted routes, keeps speech decisions active, applies no wet audio, uses input-rate content analysis on converted paths, and restores 20 ms latency |
+| Developer environment checks / Swift tests | 5 / 117 passed |
+| Speech-aware / suppression coupling | The enabled route always prepares stereo suppression for direct and converted paths; disabling speech awareness skips both mono and stereo speech-processor construction and retains base-leveler sample parity |
 | Shared immutable model and independent L/R RNNoise state | Passed |
 | Ordered-float equivalence | Accepted snapshot remains exact; a 1,000-block stereo/right-only/anti-phase differential stream is bit-exact for events, matching-channel power, probability, SNR metadata, and every L/R wet sample in debug and release-optimized builds, including probability within 0.00038 of an activity boundary |
 | Max-channel probability with matching channel power drives linked decisions | Passed against two independent mono states |
@@ -156,7 +154,7 @@ acceptance remains pending.
 | Linked stereo balance | Change no more than 0.5 dB |
 | First warm-up blocks, non-finite input/wet samples, impossible wet ranges, and corrupt-processing recovery | Passed; warm-up is dry and failure is one-shot/silent |
 | Fresh-state reset, extreme finite input, 1,000-block stereo FIFO/source-index streams, and resampler drift at 16 / 44.1 / 48 kHz | Passed with conservative extreme-input failure and finite output |
-| First, resolved, and warmed direct/converted callbacks | Zero allocations for suppression-on stereo at 16 / 44.1 / 48 kHz, including both Speex resamplers and a converted 44.1→48 kHz route; suppression-off mono paths also pass under the test-thread interposer; contended settings/failure locks are skipped and factories are not called |
+| First, resolved, and warmed direct/converted callbacks | Zero allocations for speech-aware stereo processing at 16 / 44.1 / 48 kHz, including both Speex resamplers and a converted 44.1→48 kHz route; contended settings/failure locks are skipped and factories are not called |
 | Route-change lifecycle | Teardown followed by fresh rate-specific stereo states and resumed finite 16 kHz processing passed |
 | Existing lookahead, limiter, downward compression, stereo linking, converted routes, 48→16 kHz call mode, cadence, and content-analysis rates | Passed |
 | Strict-concurrency build with warnings as errors | Passed |
@@ -233,8 +231,9 @@ copying, and wrapper work smaller still. The profiled benchmark itself measured
 The owner accepted the optimized build on 2026-08-02 using MacBook speakers,
 Sennheiser HDB 630, and Apple AirPods Pro 2. The completed scenario matrix covered
 clean and noisy speech, quiet/loud transitions, microphone bumps, instrumental
-music, stereo image, suppression-toggle comparison, clicks/dropouts, and route
-restoration. This is physical listening evidence for the optimized RNNoise path;
+music, stereo image, an A/B suppression comparison during development,
+clicks/dropouts, and route restoration. This is physical listening evidence for
+the optimized RNNoise path;
 it is kept separate from the automated equivalence and CPU results above and
 does not claim coverage of untested devices, meeting applications, or long-run
 stability.

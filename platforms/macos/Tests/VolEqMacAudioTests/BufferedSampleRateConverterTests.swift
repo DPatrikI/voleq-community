@@ -299,7 +299,7 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         }
     }
 
-    func testDisablingSpeechAwarenessSkipsAnalyzerConstruction() throws {
+    func testDisablingSpeechAwarenessSkipsAllSpeechProcessorConstruction() throws {
         let creations = AnalyzerCreationRecorder()
         let format = floatFormat(sampleRate: 48_000, channelCount: 2)
         let processor = try AudioIOProcessor(
@@ -310,151 +310,15 @@ final class BufferedSampleRateConverterTests: XCTestCase {
             speechAnalyzerFactory: { sampleRate in
                 creations.append(sampleRate)
                 throw TestSpeechFailure.startup
+            },
+            stereoSpeechProcessorFactory: { sampleRate in
+                creations.append(sampleRate)
+                throw TestSpeechFailure.startup
             }
         )
 
         XCTAssertTrue(creations.values.isEmpty)
         XCTAssertEqual(processor.directProcessingLatencyFrameCount, 960)
-    }
-
-    func testDisablingOnlyNoiseSuppressionKeepsSpeechAwareLevelingDry() throws {
-        let model = try RNNoiseModelResource.bundled()
-        let format = floatFormat(sampleRate: 48_000, channelCount: 2)
-        let suppressionDisabled = try AudioIOProcessor(
-            inputFormat: format,
-            outputFormat: format,
-            settings: neutralSettings(),
-            speechAwarenessEnabled: true,
-            noiseSuppressionEnabled: false,
-            speechModel: model
-        )
-        let speechAwareBaseline = try AudioIOProcessor(
-            inputFormat: format,
-            outputFormat: format,
-            settings: neutralSettings(),
-            speechAwarenessEnabled: true,
-            speechModel: model,
-            speechAnalyzerFactory: { sampleRate in
-                try RNNoiseSpeechAnalyzer(sampleRate: sampleRate, model: model)
-            }
-        )
-
-        XCTAssertEqual(suppressionDisabled.directProcessingLatencyFrameCount, 960)
-        XCTAssertEqual(speechAwareBaseline.directProcessingLatencyFrameCount, 960)
-
-        for callback in 0..<24 {
-            var input = (0..<480).flatMap { frame -> [Float] in
-                let absoluteFrame = callback * 480 + frame
-                let voiced = Float(
-                    sin(Double(absoluteFrame) * 0.071)
-                        + 0.4 * sin(Double(absoluteFrame) * 0.143)
-                ) * 0.05
-                let noise = Float((absoluteFrame * 31) % 127 - 63) / 63 * 0.01
-                return [voiced + noise, voiced * 0.82 - noise]
-            }
-            var actual = Array(repeating: Float.zero, count: input.count)
-            var expected = Array(repeating: Float.zero, count: input.count)
-            withInterleavedStereoBuffer(samples: &input) { inputList in
-                withMutableInterleavedBuffer(samples: &actual, channelCount: 2) { outputList in
-                    suppressionDisabled.process(input: inputList, output: outputList)
-                }
-                withMutableInterleavedBuffer(samples: &expected, channelCount: 2) { outputList in
-                    speechAwareBaseline.process(input: inputList, output: outputList)
-                }
-            }
-            assertSamplesEqual(actual, expected)
-        }
-        XCTAssertNil(suppressionDisabled.takePendingFailure())
-    }
-
-    func testSuppressionDisabledMatchesMonoSpeechAwareConvertedPathsSampleForSample() throws {
-        let model = try RNNoiseModelResource.bundled()
-        for (inputRate, inputFrames, outputRate, outputFrames) in [
-            (48_000.0, 480, 44_100.0, 441),
-            (44_100.0, 441, 48_000.0, 480)
-        ] {
-            let actualContent = ContentAnalyzerRecorder()
-            let expectedContent = ContentAnalyzerRecorder()
-            let inputFormat = floatFormat(sampleRate: inputRate, channelCount: 2)
-            let outputFormat = floatFormat(sampleRate: outputRate, channelCount: 2)
-            let suppressionDisabled = try AudioIOProcessor(
-                inputFormat: inputFormat,
-                outputFormat: outputFormat,
-                settings: neutralSettings(),
-                speechAwarenessEnabled: true,
-                noiseSuppressionEnabled: false,
-                speechModel: model,
-                contentAnalyzerFactory: { actualContent.make(sampleRate: $0) }
-            )
-            let speechAwareBaseline = try AudioIOProcessor(
-                inputFormat: inputFormat,
-                outputFormat: outputFormat,
-                settings: neutralSettings(),
-                speechAwarenessEnabled: true,
-                speechModel: model,
-                speechAnalyzerFactory: { sampleRate in
-                    try RNNoiseSpeechAnalyzer(sampleRate: sampleRate, model: model)
-                },
-                contentAnalyzerFactory: { expectedContent.make(sampleRate: $0) }
-            )
-            XCTAssertEqual(
-                suppressionDisabled.conversionProcessingLatencyFrameCount,
-                Int((inputRate * 0.020).rounded())
-            )
-
-            for callback in 0..<24 {
-                var input = (0..<inputFrames).flatMap { frame -> [Float] in
-                    let absoluteFrame = callback * inputFrames + frame
-                    let voiced = Float(
-                        sin(2 * Double.pi * 190 * Double(absoluteFrame) / inputRate)
-                            + 0.35 * sin(
-                                2 * Double.pi * 380 * Double(absoluteFrame) / inputRate
-                            )
-                    ) * 0.05
-                    let noise = Float((absoluteFrame * 29) % 131 - 65) / 65 * 0.01
-                    return [voiced + noise, voiced * 0.8 - noise]
-                }
-                var actual = Array(repeating: Float.zero, count: outputFrames * 2)
-                var expected = Array(repeating: Float.zero, count: outputFrames * 2)
-                let timestamp = hostTimestamp(UInt64(callback * 10_000))
-                withInterleavedStereoBuffer(samples: &input) { inputList in
-                    withMutableInterleavedBuffer(
-                        samples: &actual,
-                        channelCount: 2
-                    ) { outputList in
-                        suppressionDisabled.process(
-                            input: inputList,
-                            inputTime: timestamp,
-                            output: outputList,
-                            outputTime: timestamp
-                        )
-                    }
-                    withMutableInterleavedBuffer(
-                        samples: &expected,
-                        channelCount: 2
-                    ) { outputList in
-                        speechAwareBaseline.process(
-                            input: inputList,
-                            inputTime: timestamp,
-                            output: outputList,
-                            outputTime: timestamp
-                        )
-                    }
-                }
-                assertSamplesEqual(actual, expected)
-            }
-
-            XCTAssertEqual(
-                suppressionDisabled.currentDiagnostics()?.path,
-                .sampleRateConverter
-            )
-            XCTAssertGreaterThan(actualContent.appendedFrameCount(at: inputRate), 0)
-            XCTAssertEqual(actualContent.appendedFrameCount(at: outputRate), 0)
-            XCTAssertGreaterThan(expectedContent.appendedFrameCount(at: inputRate), 0)
-            XCTAssertEqual(expectedContent.appendedFrameCount(at: outputRate), 0)
-            XCTAssertNil(suppressionDisabled.takePendingFailure())
-            XCTAssertNil(speechAwareBaseline.takePendingFailure())
-        }
     }
 
     func testDisabledSpeechAwarenessMatchesBaseDirectPathSampleForSample() throws {

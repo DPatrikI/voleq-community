@@ -73,20 +73,8 @@ struct ContentView: View {
                 .disabled(audio.isRunning)
             Text(
                 audio.speechAwarenessEnabled
-                    ? "On: quiet gain is limited to detected speech."
+                    ? "On: quiet gain is limited to detected speech, with mild noise suppression."
                     : "Off: uses the leveler without speech recognition."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            Toggle("Mild noise suppression", isOn: $audio.noiseSuppressionEnabled)
-                .disabled(audio.isRunning || !audio.speechAwarenessEnabled)
-            Text(
-                !audio.speechAwarenessEnabled
-                    ? "Available when speech-aware leveling is on."
-                    : audio.noiseSuppressionEnabled
-                        ? "On: gently reduces stationary noise while speech is active."
-                        : "Off: speech-aware leveling stays active without denoising."
             )
             .font(.caption)
             .foregroundStyle(.secondary)

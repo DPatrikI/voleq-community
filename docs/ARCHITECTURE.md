@@ -76,13 +76,10 @@ The open-source macOS application shell. It owns the Community interface, permis
   eligibility is stored beside delayed audio and transient caps; a result can
   backfill only the source frames it covers, so an opening syllable is preserved
   without granting upward gain to earlier unrelated sound.
-- Speech-aware leveling and mild suppression are selected independently before
-  the route starts. With suppression enabled, the route prepares two RNNoise
-  states per processing path and uses the aligned wet timeline below. With only
-  suppression disabled, it prepares the accepted mono RNNoise analyzer instead:
-  speech-aware eligibility remains active, wet audio is never applied, and the
-  DSP timeline returns to 20 ms. Disabling speech awareness skips all model and
-  analyzer construction and uses the base leveler.
+- Mild suppression is part of speech-aware leveling. When speech awareness is
+  enabled before the route starts, the route prepares two RNNoise states per
+  processing path and uses the aligned wet timeline below. Disabling speech
+  awareness skips all model and analyzer construction and uses the base leveler.
 - RNNoise probability describes the current 10 ms input block, while wet audio
   follows a separate overlap-add timeline. Absolute source-frame tags and
   fixed-capacity dry/wet storage validate every mapping before backfilling the
@@ -109,9 +106,8 @@ The open-source macOS application shell. It owns the Community interface, permis
   immediately. Gain below unity remains immediate so loud onsets retain
   lookahead protection. Disabling
   speech-aware leveling while stopped skips model and analyzer construction and
-  uses the base leveler. The suppression switch is also fixed while running, so
-  changing either mode never constructs or destroys processing state in the
-  callback.
+  uses the base leveler. The setting is fixed while running, so changing modes
+  never constructs or destroys processing state in the callback.
 - Mild suppression has a separate activity gate so leveling's 200 ms hold and
   150 ms eligibility fade do not lengthen its timing. The linked wet target is
   50% when estimated SNR is at or below 18 dB, follows a smoothstep taper to

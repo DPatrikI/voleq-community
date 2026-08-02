@@ -103,48 +103,23 @@ final class RealtimeAllocationTests: XCTestCase {
         }
     }
 
-    func testSuppressionDisabledDirectCallbacksAreAllocationFree() throws {
-        let format = floatFormat(sampleRate: 48_000)
-        let processor = try AudioIOProcessor(
-            inputFormat: format,
-            outputFormat: format,
-            settings: neutralSettings(),
-            noiseSuppressionEnabled: false,
-            systemContentAnalysisEnabled: true
-        )
-        XCTAssertEqual(processAllocationCount(processor: processor), 0)
-        for callback in 1..<9 {
-            _ = processAllocationCount(
-                processor: processor,
-                callback: callback,
-                tracks: false
-            )
-        }
-        XCTAssertEqual(processAllocationCount(processor: processor, callback: 9), 0)
-    }
-
-    func testSuppressionDisabledConvertedCallbacksAreAllocationFree() throws {
+    func testSpeechAwareLevelingAlwaysPreparesStereoSuppression() throws {
+        let model = try RNNoiseModelResource.bundled()
+        let recorder = StereoFactoryRecorder()
         let processor = try AudioIOProcessor(
             inputFormat: floatFormat(sampleRate: 48_000),
             outputFormat: floatFormat(sampleRate: 44_100),
             settings: neutralSettings(),
-            noiseSuppressionEnabled: false,
-            systemContentAnalysisEnabled: true
+            speechModel: model,
+            stereoSpeechProcessorFactory: { sampleRate in
+                recorder.record(sampleRate)
+                return try RNNoiseStereoProcessor(sampleRate: sampleRate, model: model)
+            }
         )
-        for callback in 0..<4 {
-            XCTAssertEqual(
-                processAllocationCount(processor: processor, callback: callback),
-                0
-            )
-        }
-        for callback in 4..<12 {
-            _ = processAllocationCount(
-                processor: processor,
-                callback: callback,
-                tracks: false
-            )
-        }
-        XCTAssertEqual(processAllocationCount(processor: processor, callback: 12), 0)
+
+        XCTAssertEqual(recorder.sampleRates, [44_100, 48_000])
+        XCTAssertEqual(processor.directProcessingLatencyFrameCount, 1_373)
+        XCTAssertEqual(processor.conversionProcessingLatencyFrameCount, 1_440)
     }
 
     func testContendedSettingsSnapshotDoesNotBlockOrConstructProcessors() throws {

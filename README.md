@@ -14,8 +14,8 @@ The Community app intentionally has a small surface:
 - turn voice leveling on or off;
 - attach to one currently active application or the device-wide output mix;
 - turn speech-aware quiet-gain protection on or off while stopped;
-- turn mild noise suppression on or off independently while stopped;
-- use fixed, safe speech-leveling and automatic mild-noise-suppression presets.
+- automatically apply mild noise suppression with speech-aware leveling;
+- use fixed, safe speech-leveling and mild-noise-suppression presets.
 
 The source is open for inspection, modification, and contribution. VolEq Premium is planned as a separately distributed application with advanced controls, profiles, automation, automatic switching, and commercial support. See [the edition boundary](docs/EDITIONS.md).
 
@@ -54,11 +54,9 @@ The application is assembled at `dist/VolEq Community.app`.
 
 On macOS 14.2+, VolEq uses Core Audio process taps to capture an application's outgoing audio, applies linked-stereo speech leveling, and sends the result to the current default output device. One offline RNNoise state per channel supplies voice activity and aligned denoised audio. Quiet speech can be raised, while static and other non-speech are never raised. During authorized speech with measurable background noise, VolEq automatically blends in at most 50% of the RNNoise output; clean speech, music, and non-speech remain dry. Loud content still receives downward protection regardless of classification. The original selected audio is muted only while VolEq is actively replacing it. Device-wide mode excludes VolEq itself to avoid a feedback loop.
 
-Speech-aware leveling and mild noise suppression have separate switches that are
-chosen before starting a session. Turning only suppression off keeps the accepted
-speech-aware leveler active on its 20 ms mono-analysis timeline and never applies
-RNNoise wet audio. Turning speech awareness off skips model and analyzer
-construction entirely and uses the base lookahead leveler.
+Mild noise suppression is part of speech-aware leveling and runs automatically
+whenever speech awareness is on. Turning speech awareness off skips model and
+analyzer construction entirely and uses the base lookahead leveler.
 
 Speech analysis uses the bundled model and performs no network requests. VolEq
 does not record, persist, upload, or add telemetry to captured audio. See the
@@ -73,10 +71,10 @@ No virtual audio driver or permanent system-wide output-device change is require
 - Output changes trigger an automatic reconnect and can produce a brief silence while Core Audio settles the new route.
 - Only processes currently producing audio appear in the application selector.
 - The current path supports mono or stereo 32-bit floating-point PCM and converts differing capture/output sample rates. Multichannel layouts fail safely before processing starts.
-- The optimized mild-suppression build was physically accepted on 2026-08-02 across MacBook speakers, Sennheiser HDB 630, and Apple AirPods Pro 2. The owner covered clean and noisy speech, quiet/loud transitions, microphone bumps, instrumental music, stereo image, suppression-toggle comparison, clicks/dropouts, and route restoration. Deterministic tests cover 48↔44.1 kHz and 48→16 kHz paths, but broader headset compatibility, meeting apps, the documented soak, and long-running stability still need structured validation.
+- The optimized mild-suppression build was physically accepted on 2026-08-02 across MacBook speakers, Sennheiser HDB 630, and Apple AirPods Pro 2. The owner covered clean and noisy speech, quiet/loud transitions, microphone bumps, instrumental music, stereo image, an A/B suppression comparison during development, clicks/dropouts, and route restoration. Deterministic tests cover 48↔44.1 kHz and 48→16 kHz paths, but broader headset compatibility, meeting apps, the documented soak, and long-running stability still need structured validation.
 - The current mixed-stream processor levels the combined incoming audio. It cannot identify individual meeting participants or keep a separate profile for each speaker.
 - Singing can be classified as speech and may therefore receive quiet-speech leveling and mild suppression.
-- When enabled, mild suppression uses 30 ms total DSP latency at 48 kHz so the pinned RNNoise build's two-block wet reconstruction is aligned correctly. Measured Speex resampler delay raises that total to 33.0 ms at 16 kHz and about 31.13 ms at 44.1 kHz. The leveler's accepted 20 ms loud-onset lookahead remains intact inside that timeline. Turning only suppression off restores the speech-aware leveler's 20 ms timeline.
+- Speech-aware leveling uses 30 ms total DSP latency at 48 kHz so the pinned RNNoise build's two-block wet reconstruction is aligned correctly for mild suppression. Measured Speex resampler delay raises that total to 33.0 ms at 16 kHz and about 31.13 ms at 44.1 kHz. The leveler's accepted 20 ms loud-onset lookahead remains intact inside that timeline. Turning speech awareness off uses the base leveler's 20 ms timeline.
 - The required 48 kHz stereo release benchmark now records 4.33%–4.37% of one core across five post-review runs on the development Mac, passing the unchanged 5% target. Owner listening of the optimized build has passed; the documented soak remains pending and automated CPU evidence does not replace it.
 
 ## Repository map

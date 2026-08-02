@@ -644,7 +644,6 @@ final class AudioIOProcessor {
         outputFormat: AudioStreamBasicDescription,
         settings: LevelingSettings,
         speechAwarenessEnabled: Bool = true,
-        noiseSuppressionEnabled: Bool = true,
         speechModel: RNNoiseModelResource? = nil,
         speechAnalyzerFactory: ((Double) throws -> any SpeechAnalyzing)? = nil,
         stereoSpeechProcessorFactory: ((Double) throws -> any StereoSpeechProcessing)? = nil,
@@ -699,7 +698,7 @@ final class AudioIOProcessor {
                     speechAnalyzer: conversionAnalyzer,
                     upwardGainAuthorizer: conversionContentAnalyzer
                 )
-            } else if noiseSuppressionEnabled {
+            } else {
                 let model = try speechModel ?? Self.loadSpeechModel()
                 let directProcessor = try stereoSpeechProcessorFactory?(
                     outputFormat.mSampleRate
@@ -723,28 +722,6 @@ final class AudioIOProcessor {
                     sampleRate: inputFormat.mSampleRate,
                     settings: settings,
                     stereoSpeechProcessor: conversionProcessor,
-                    upwardGainAuthorizer: conversionContentAnalyzer
-                )
-            } else {
-                let model = try speechModel ?? Self.loadSpeechModel()
-                let directAnalyzer = try RNNoiseSpeechAnalyzer(
-                    sampleRate: outputFormat.mSampleRate,
-                    model: model
-                )
-                let conversionAnalyzer = try RNNoiseSpeechAnalyzer(
-                    sampleRate: inputFormat.mSampleRate,
-                    model: model
-                )
-                directDynamics = try DynamicsProcessor(
-                    sampleRate: outputFormat.mSampleRate,
-                    settings: settings,
-                    speechAnalyzer: directAnalyzer,
-                    upwardGainAuthorizer: directContentAnalyzer
-                )
-                conversionDynamics = try DynamicsProcessor(
-                    sampleRate: inputFormat.mSampleRate,
-                    settings: settings,
-                    speechAnalyzer: conversionAnalyzer,
                     upwardGainAuthorizer: conversionContentAnalyzer
                 )
             }

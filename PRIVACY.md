@@ -1,6 +1,6 @@
 # Privacy
 
-VolEq Community processes captured audio locally in memory. When mild suppression is enabled, bundled RNNoise states analyze and mildly denoise speech; turning only suppression off keeps mono RNNoise speech analysis active but never applies denoised samples. Apple's offline SoundAnalysis framework supplies the slower speech-versus-music decision. The current application does not intentionally record audio to disk, transmit audio, create user accounts, include analytics, or contact a VolEq server.
+VolEq Community processes captured audio locally in memory. When speech-aware leveling is enabled, bundled RNNoise states analyze and mildly denoise speech. Turning speech awareness off skips RNNoise and speech analysis entirely. Apple's offline SoundAnalysis framework supplies the slower speech-versus-music decision. The current application does not intentionally record audio to disk, transmit audio, create user accounts, include analytics, or contact a VolEq server.
 
 macOS controls access through System Audio Recording permission. VolEq requests access because it must capture selected outgoing application audio before leveling and replaying it to the current output device.
 
