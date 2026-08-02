@@ -10,7 +10,7 @@
 ## Validation before a public release
 
 - [Implemented; validated on Sennheiser HDB 630 and Apple AirPods Pro 2] Handle synchronized and converted headset paths in regular playback and call mode with the microphone active. Live profile switching while VolEq remains active and broader device coverage remain pending;
-- [Implemented; automated validation and owner preset acceptance complete, device matrix pending] Add 20 ms lookahead peak protection and stronger loud-origin reduction without exposing advanced Community controls;
+- [Implemented; automated validation and revised preset acceptance complete, device matrix pending] Add 20 ms lookahead peak protection and restrained loud-origin reduction without exposing advanced Community controls;
 - [Implemented; automated validation plus quiet-speech and instrumental-music
   MacBook listening accepted, broader device matrix pending] Gate upward
   leveling with fully offline speech probability, a learned noise floor, and a

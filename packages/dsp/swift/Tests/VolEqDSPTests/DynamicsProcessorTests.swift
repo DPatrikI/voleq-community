@@ -251,12 +251,19 @@ final class DynamicsProcessorTests: XCTestCase {
         XCTAssertEqual(followingOutput.right, 0)
     }
 
-    func testLoudOriginSpeechSettlesAtLeastFiveDecibelsBelowQuietOriginSpeech() {
+    func testTypicalProgramLevelStaysWithinThreeDecibelsOfBypass() {
+        let inputDB: Float = -14
+        let outputDB = settledProcessedOutputDB(inputDB: inputDB)
+
+        XCTAssertLessThanOrEqual(abs(outputDB - inputDB), 3)
+    }
+
+    func testLoudOriginSpeechSettlesCloseToButBelowQuietOriginSpeech() {
         let quietOutputDB = settledProcessedOutputDB(inputDB: -40)
         let loudOutputDB = settledProcessedOutputDB(inputDB: -6)
 
-        XCTAssertGreaterThanOrEqual(quietOutputDB - loudOutputDB, 5)
-        XCTAssertLessThanOrEqual(quietOutputDB - loudOutputDB, 9)
+        XCTAssertGreaterThanOrEqual(quietOutputDB - loudOutputDB, 0)
+        XCTAssertLessThanOrEqual(quietOutputDB - loudOutputDB, 2)
     }
 
     func testInvalidSettingsUpdateCannotProduceNonFiniteSamples() {
