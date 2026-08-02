@@ -67,6 +67,7 @@ const int eband20ms[NB_BANDS+2] = {
 
 struct DenoiseState {
   RNNoise model;
+  const RNNModel *model_identity;
 #if !TRAINING
   int arch;
 #endif
@@ -302,6 +303,7 @@ int rnnoise_init(DenoiseState *st, RNNModel *model) {
   }
 #endif
   st->arch = rnn_select_arch();
+  st->model_identity = model;
 #else
   (void)model;
 #endif
@@ -418,6 +420,24 @@ void rnn_biquad(float *y, float mem[2], const float *x, const float *b, const fl
   }
 }
 
+static void rnn_biquad_pair(float *y0, float mem0[2], const float *x0,
+      float *y1, float mem1[2], const float *x1, const float *b, const float *a, int N) {
+  int i;
+  for (i=0;i<N;i++) {
+    float xi0, yi0, xi1, yi1;
+    xi0 = x0[i];
+    yi0 = x0[i] + mem0[0];
+    mem0[0] = mem0[1] + (b[0]*(double)xi0 - a[0]*(double)yi0);
+    mem0[1] = (b[1]*(double)xi0 - a[1]*(double)yi0);
+    y0[i] = yi0;
+    xi1 = x1[i];
+    yi1 = x1[i] + mem1[0];
+    mem1[0] = mem1[1] + (b[0]*(double)xi1 - a[0]*(double)yi1);
+    mem1[1] = (b[1]*(double)xi1 - a[1]*(double)yi1);
+    y1[i] = yi1;
+  }
+}
+
 void rnn_pitch_filter(kiss_fft_cpx *X, const kiss_fft_cpx *P, const float *Ex, const float *Ep,
                   const float *Exp, const float *g) {
   int i;
@@ -503,3 +523,85 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   return vad_prob;
 }
 
+float rnnoise_process_frame_pair(DenoiseState *st0, float *out0, const float *in0,
+      DenoiseState *st1, float *out1, const float *in1, float *right_vad) {
+  int i;
+  kiss_fft_cpx X0[FREQ_SIZE], X1[FREQ_SIZE];
+  kiss_fft_cpx P0[FREQ_SIZE], P1[FREQ_SIZE];
+  float x0[FRAME_SIZE], x1[FRAME_SIZE];
+  float Ex0[NB_BANDS], Ep0[NB_BANDS], Exp0[NB_BANDS];
+  float Ex1[NB_BANDS], Ep1[NB_BANDS], Exp1[NB_BANDS];
+  float features0[NB_FEATURES], features1[NB_FEATURES];
+  float g0[NB_BANDS], g1[NB_BANDS];
+  float gf0[FREQ_SIZE]={1}, gf1[FREQ_SIZE]={1};
+  float vad0 = 0, vad1 = 0;
+  int silence0, silence1;
+  static const float a_hp[2] = {-1.99599, 0.99600};
+  static const float b_hp[2] = {-2, 1};
+
+#if !TRAINING
+  if (st0->arch != st1->arch || st0->model_identity != st1->model_identity) {
+    vad0 = rnnoise_process_frame(st0, out0, in0);
+    *right_vad = rnnoise_process_frame(st1, out1, in1);
+    return vad0;
+  }
+#endif
+
+  rnn_biquad_pair(x0, st0->mem_hp_x, in0, x1, st1->mem_hp_x, in1,
+    b_hp, a_hp, FRAME_SIZE);
+  silence0 = rnn_compute_frame_features(st0, X0, P0, Ex0, Ep0, Exp0, features0, x0);
+  silence1 = rnn_compute_frame_features(st1, X1, P1, Ex1, Ep1, Exp1, features1, x1);
+
+#if !TRAINING
+  if (!silence0 && !silence1) {
+    compute_rnn_pair(&st0->model, &st0->rnn, g0, &vad0, features0,
+      &st1->rnn, g1, &vad1, features1, st0->arch);
+  } else {
+    if (!silence0) compute_rnn(&st0->model, &st0->rnn, g0, &vad0, features0, st0->arch);
+    if (!silence1) compute_rnn(&st1->model, &st1->rnn, g1, &vad1, features1, st1->arch);
+  }
+#endif
+
+  if (!silence0) {
+    rnn_pitch_filter(st0->delayed_X, st0->delayed_P, st0->delayed_Ex, st0->delayed_Ep, st0->delayed_Exp, g0);
+    for (i=0;i<NB_BANDS;i++) {
+      float alpha = .6f;
+      g0[i] = MAX16(g0[i], alpha*st0->lastg[i]);
+      st0->lastg[i] = MIN16(1.f, g0[i]*(st0->delayed_Ex[i]+1e-3)/(Ex0[i]+1e-3));
+    }
+    interp_band_gain(gf0, g0);
+    for (i=0;i<FREQ_SIZE;i++) {
+      st0->delayed_X[i].r *= gf0[i];
+      st0->delayed_X[i].i *= gf0[i];
+    }
+  }
+  frame_synthesis(st0, out0, st0->delayed_X);
+  RNN_COPY(st0->delayed_X, X0, FREQ_SIZE);
+  RNN_COPY(st0->delayed_P, P0, FREQ_SIZE);
+  RNN_COPY(st0->delayed_Ex, Ex0, NB_BANDS);
+  RNN_COPY(st0->delayed_Ep, Ep0, NB_BANDS);
+  RNN_COPY(st0->delayed_Exp, Exp0, NB_BANDS);
+
+  if (!silence1) {
+    rnn_pitch_filter(st1->delayed_X, st1->delayed_P, st1->delayed_Ex, st1->delayed_Ep, st1->delayed_Exp, g1);
+    for (i=0;i<NB_BANDS;i++) {
+      float alpha = .6f;
+      g1[i] = MAX16(g1[i], alpha*st1->lastg[i]);
+      st1->lastg[i] = MIN16(1.f, g1[i]*(st1->delayed_Ex[i]+1e-3)/(Ex1[i]+1e-3));
+    }
+    interp_band_gain(gf1, g1);
+    for (i=0;i<FREQ_SIZE;i++) {
+      st1->delayed_X[i].r *= gf1[i];
+      st1->delayed_X[i].i *= gf1[i];
+    }
+  }
+  frame_synthesis(st1, out1, st1->delayed_X);
+  RNN_COPY(st1->delayed_X, X1, FREQ_SIZE);
+  RNN_COPY(st1->delayed_P, P1, FREQ_SIZE);
+  RNN_COPY(st1->delayed_Ex, Ex1, NB_BANDS);
+  RNN_COPY(st1->delayed_Ep, Ep1, NB_BANDS);
+  RNN_COPY(st1->delayed_Exp, Exp1, NB_BANDS);
+
+  *right_vad = vad1;
+  return vad0;
+}

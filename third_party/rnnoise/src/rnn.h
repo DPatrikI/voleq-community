@@ -45,5 +45,7 @@ typedef struct {
   float gru3_state[GRU3_STATE_SIZE];
 } RNNState;
 void compute_rnn(const RNNoise *model, RNNState *rnn, float *gains, float *vad, const float *input, int arch);
+void compute_rnn_pair(const RNNoise *model, RNNState *rnn0, float *gains0, float *vad0, const float *input0,
+  RNNState *rnn1, float *gains1, float *vad1, const float *input1, int arch);
 
 #endif /* RNN_H_ */

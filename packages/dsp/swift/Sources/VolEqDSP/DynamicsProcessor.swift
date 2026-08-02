@@ -77,15 +77,15 @@ public final class DynamicsProcessor: @unchecked Sendable {
     private var powerEnvelope: Float = 0
     private var smoothedGain: Float = 1
     private var smoothedSpeechOutputGain: Float = 1
-    private var delayedLeft: [Float]
-    private var delayedRight: [Float]
-    private var delayedMaximumGain: [Float]
-    private var delayedUpwardEligibility: [Float]
-    private var delayedWetLeft: [Float]
-    private var delayedWetRight: [Float]
-    private var delayedWetValid: [Bool]
-    private var delayedSuppressionTarget: [Float]
-    private var delayedSourceFrameIndex: [Int64]
+    private let delayedLeft: UnsafeMutableBufferPointer<Float>
+    private let delayedRight: UnsafeMutableBufferPointer<Float>
+    private let delayedMaximumGain: UnsafeMutableBufferPointer<Float>
+    private let delayedUpwardEligibility: UnsafeMutableBufferPointer<Float>
+    private let delayedWetLeft: UnsafeMutableBufferPointer<Float>
+    private let delayedWetRight: UnsafeMutableBufferPointer<Float>
+    private let delayedWetValid: UnsafeMutableBufferPointer<Bool>
+    private let delayedSuppressionTarget: UnsafeMutableBufferPointer<Float>
+    private let delayedSourceFrameIndex: UnsafeMutableBufferPointer<Int64>
     private var delayWriteIndex = 0
     private var delayedFrameCount = 0
     private var activeLookaheadFrameCount: Int
@@ -241,21 +241,33 @@ public final class DynamicsProcessor: @unchecked Sendable {
         let analysisBlockCapacity = speechAnalyzer?.sourceBlockFrameCount ?? 1
         analysisLeftBlock = Array(repeating: 0, count: analysisBlockCapacity)
         analysisRightBlock = Array(repeating: 0, count: analysisBlockCapacity)
-        delayedLeft = Array(repeating: 0, count: maximumLookaheadFrameCount)
-        delayedRight = Array(repeating: 0, count: maximumLookaheadFrameCount)
-        delayedMaximumGain = Array(
+        delayedLeft = Self.allocateBuffer(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedRight = Self.allocateBuffer(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedMaximumGain = Self.allocateBuffer(
             repeating: Float.greatestFiniteMagnitude,
             count: maximumLookaheadFrameCount
         )
-        delayedUpwardEligibility = Array(
+        delayedUpwardEligibility = Self.allocateBuffer(
             repeating: self.appliesSpeechLeveling ? 0 : 1,
             count: maximumLookaheadFrameCount
         )
-        delayedWetLeft = Array(repeating: 0, count: maximumLookaheadFrameCount)
-        delayedWetRight = Array(repeating: 0, count: maximumLookaheadFrameCount)
-        delayedWetValid = Array(repeating: false, count: maximumLookaheadFrameCount)
-        delayedSuppressionTarget = Array(repeating: 0, count: maximumLookaheadFrameCount)
-        delayedSourceFrameIndex = Array(repeating: -1, count: maximumLookaheadFrameCount)
+        delayedWetLeft = Self.allocateBuffer(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedWetRight = Self.allocateBuffer(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedWetValid = Self.allocateBuffer(repeating: false, count: maximumLookaheadFrameCount)
+        delayedSuppressionTarget = Self.allocateBuffer(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedSourceFrameIndex = Self.allocateBuffer(repeating: -1, count: maximumLookaheadFrameCount)
+    }
+
+    deinit {
+        Self.deallocateBuffer(delayedLeft)
+        Self.deallocateBuffer(delayedRight)
+        Self.deallocateBuffer(delayedMaximumGain)
+        Self.deallocateBuffer(delayedUpwardEligibility)
+        Self.deallocateBuffer(delayedWetLeft)
+        Self.deallocateBuffer(delayedWetRight)
+        Self.deallocateBuffer(delayedWetValid)
+        Self.deallocateBuffer(delayedSuppressionTarget)
+        Self.deallocateBuffer(delayedSourceFrameIndex)
     }
 
     public var settings: LevelingSettings {
@@ -895,5 +907,21 @@ public final class DynamicsProcessor: @unchecked Sendable {
                 % activeLookaheadFrameCount
             delayedUpwardEligibility[index] = eligibility
         }
+    }
+
+    private static func allocateBuffer<Element>(
+        repeating value: Element,
+        count: Int
+    ) -> UnsafeMutableBufferPointer<Element> {
+        let storage = UnsafeMutablePointer<Element>.allocate(capacity: count)
+        storage.initialize(repeating: value, count: count)
+        return UnsafeMutableBufferPointer(start: storage, count: count)
+    }
+
+    private static func deallocateBuffer<Element>(
+        _ buffer: UnsafeMutableBufferPointer<Element>
+    ) {
+        buffer.deinitialize()
+        buffer.baseAddress?.deallocate()
     }
 }

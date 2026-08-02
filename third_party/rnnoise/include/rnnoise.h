@@ -94,6 +94,21 @@ RNNOISE_EXPORT void rnnoise_destroy(DenoiseState *st);
 RNNOISE_EXPORT float rnnoise_process_frame(DenoiseState *st, float *out, const float *in);
 
 /**
+ * Denoise two independent frames that use the same immutable model weights.
+ *
+ * Each state retains independent recurrent and signal history. right_vad receives
+ * the probability for st1; the return value is the probability for st0.
+ */
+#if defined(__GNUC__)
+# define RNNOISE_INTERNAL __attribute__ ((visibility ("hidden")))
+#else
+# define RNNOISE_INTERNAL
+#endif
+RNNOISE_INTERNAL float rnnoise_process_frame_pair(DenoiseState *st0, float *out0, const float *in0,
+  DenoiseState *st1, float *out1, const float *in1, float *right_vad);
+#undef RNNOISE_INTERNAL
+
+/**
  * Load a model from a memory buffer
  *
  * It must be deallocated with rnnoise_model_free() and the buffer must remain

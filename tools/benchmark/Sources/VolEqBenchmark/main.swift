@@ -5,6 +5,11 @@ import Foundation
 import VolEqDSP
 import VolEqSpeech
 
+precondition(
+    !_isDebugAssertConfiguration(),
+    "VolEqBenchmark must be built in release mode"
+)
+
 private final class BenchmarkAuthority: UpwardGainAuthorizing, @unchecked Sendable {
     let allowsUpwardGain = true
 }
@@ -31,6 +36,14 @@ let sampleRate = 48_000
 let representedSeconds = 60
 let model = try RNNoiseModelResource.bundled()
 let speech = try RNNoiseStereoProcessor(sampleRate: Double(sampleRate), model: model)
+guard speech.sourceBlockFrameCount == 480,
+      speech.decisionLatencyFrameCount == 480,
+      speech.processingLatencyFrameCount == 1_440,
+      speech.inputResamplerLatencyFrameCount == 0,
+      speech.outputResamplerLatencyFrameCount == 0 else {
+    fputs("benchmark failed: unexpected 48 kHz RNNoise workload or latency\n", stderr)
+    exit(2)
+}
 let processor = try DynamicsProcessor(
     sampleRate: Double(sampleRate),
     stereoSpeechProcessor: speech,
@@ -61,15 +74,26 @@ for frame in 0..<(sampleRate * 2) {
     _ = processor.processFrame(left: fixtureLeft[fixture], right: fixtureRight[fixture])
 }
 
+let startingInferencePairCount = speech.completedOptimizedInferencePairCount
 let start = threadCPUSeconds()
+var outputChecksum: Float = 0
 for frame in 0..<(sampleRate * representedSeconds) {
     if frame.isMultiple(of: 512) { processor.beginAudioBuffer() }
     let fixture = frame % fixtureFrameCount
-    _ = processor.processFrame(left: fixtureLeft[fixture], right: fixtureRight[fixture])
+    let output = processor.processFrame(left: fixtureLeft[fixture], right: fixtureRight[fixture])
+    if frame.isMultiple(of: 4_096) {
+        outputChecksum += abs(output.left) + abs(output.right)
+    }
 }
 let cpuSeconds = threadCPUSeconds() - start
 let cpuPercent = cpuSeconds / Double(representedSeconds) * 100
-guard !processor.consumeProcessingFailure(), cpuPercent.isFinite else {
+let completedInferencePairCount = speech.completedOptimizedInferencePairCount
+    - startingInferencePairCount
+guard !processor.consumeProcessingFailure(),
+      cpuPercent.isFinite,
+      outputChecksum.isFinite,
+      outputChecksum > 0,
+      completedInferencePairCount == representedSeconds * 100 else {
     fputs("benchmark failed: processing did not remain finite\n", stderr)
     exit(1)
 }

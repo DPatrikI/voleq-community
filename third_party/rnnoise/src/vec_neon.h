@@ -299,64 +299,224 @@ static inline void sgemv(float *out, const float *weights, int rows, int cols, i
    }
 }
 
-/* Temporarily use unoptimized version */
+#define HAVE_SGEMV_PAIR 1
+static inline void sgemv_pair(float * restrict out0, float * restrict out1,
+      const float * restrict weights, int rows, int cols, int col_stride,
+      const float * restrict x0, const float * restrict x1)
+{
+   int i, j;
+   if ((rows&0x7) != 0) {
+      sgemv(out0, weights, rows, cols, col_stride, x0);
+      sgemv(out1, weights, rows, cols, col_stride, x1);
+      return;
+   }
+   if ((rows&0xf) == 0) {
+      for (i=0;i<rows;i+=16)
+      {
+         float32x4_t y0_0_3 = vdupq_n_f32(0);
+         float32x4_t y0_4_7 = vdupq_n_f32(0);
+         float32x4_t y0_8_11 = vdupq_n_f32(0);
+         float32x4_t y0_12_15 = vdupq_n_f32(0);
+         float32x4_t y1_0_3 = vdupq_n_f32(0);
+         float32x4_t y1_4_7 = vdupq_n_f32(0);
+         float32x4_t y1_8_11 = vdupq_n_f32(0);
+         float32x4_t y1_12_15 = vdupq_n_f32(0);
+         for (j=0;j<cols;j++)
+         {
+            const float *w = &weights[j*col_stride + i];
+            float32x4_t w0_3 = vld1q_f32(&w[0]);
+            float32x4_t w4_7 = vld1q_f32(&w[4]);
+            float32x4_t w8_11 = vld1q_f32(&w[8]);
+            float32x4_t w12_15 = vld1q_f32(&w[12]);
+            float32x4_t input0 = vld1q_dup_f32(&x0[j]);
+            float32x4_t input1 = vld1q_dup_f32(&x1[j]);
+            y0_0_3 = vmlaq_f32(y0_0_3, w0_3, input0);
+            y0_4_7 = vmlaq_f32(y0_4_7, w4_7, input0);
+            y0_8_11 = vmlaq_f32(y0_8_11, w8_11, input0);
+            y0_12_15 = vmlaq_f32(y0_12_15, w12_15, input0);
+            y1_0_3 = vmlaq_f32(y1_0_3, w0_3, input1);
+            y1_4_7 = vmlaq_f32(y1_4_7, w4_7, input1);
+            y1_8_11 = vmlaq_f32(y1_8_11, w8_11, input1);
+            y1_12_15 = vmlaq_f32(y1_12_15, w12_15, input1);
+         }
+         vst1q_f32(&out0[i], y0_0_3);
+         vst1q_f32(&out0[i+4], y0_4_7);
+         vst1q_f32(&out0[i+8], y0_8_11);
+         vst1q_f32(&out0[i+12], y0_12_15);
+         vst1q_f32(&out1[i], y1_0_3);
+         vst1q_f32(&out1[i+4], y1_4_7);
+         vst1q_f32(&out1[i+8], y1_8_11);
+         vst1q_f32(&out1[i+12], y1_12_15);
+      }
+      return;
+   }
+   for (i=0;i<rows;i+=8)
+   {
+      float32x4_t y0_0_3 = vdupq_n_f32(0);
+      float32x4_t y0_4_7 = vdupq_n_f32(0);
+      float32x4_t y1_0_3 = vdupq_n_f32(0);
+      float32x4_t y1_4_7 = vdupq_n_f32(0);
+      for (j=0;j<cols;j++)
+      {
+         const float *w = &weights[j*col_stride + i];
+         float32x4_t w0_3 = vld1q_f32(&w[0]);
+         float32x4_t w4_7 = vld1q_f32(&w[4]);
+         y0_0_3 = vmlaq_f32(y0_0_3, w0_3, vld1q_dup_f32(&x0[j]));
+         y0_4_7 = vmlaq_f32(y0_4_7, w4_7, vld1q_dup_f32(&x0[j]));
+         y1_0_3 = vmlaq_f32(y1_0_3, w0_3, vld1q_dup_f32(&x1[j]));
+         y1_4_7 = vmlaq_f32(y1_4_7, w4_7, vld1q_dup_f32(&x1[j]));
+      }
+      vst1q_f32(&out0[i], y0_0_3);
+      vst1q_f32(&out0[i+4], y0_4_7);
+      vst1q_f32(&out1[i], y1_0_3);
+      vst1q_f32(&out1[i+4], y1_4_7);
+   }
+}
+
 static inline void sparse_sgemv8x4(float *out, const float *w, const int *idx, int rows, const float *x)
 {
    int i, j;
-   RNN_CLEAR(out, rows);
    for (i=0;i<rows;i+=8)
    {
       int cols;
+      float32x4_t y0_3;
+      float32x4_t y4_7;
+      y0_3 = vdupq_n_f32(0);
+      y4_7 = vdupq_n_f32(0);
       cols = *idx++;
       for (j=0;j<cols;j++)
       {
          int pos;
-         float * restrict y;
-         float xj0, xj1, xj2, xj3;
+         float32x4_t xj0, xj1, xj2, xj3;
          pos = (*idx++);
-         xj0 = x[pos+0];
-         xj1 = x[pos+1];
-         xj2 = x[pos+2];
-         xj3 = x[pos+3];
-         y = &out[i];
-         y[0] += w[0]*xj0;
-         y[1] += w[1]*xj0;
-         y[2] += w[2]*xj0;
-         y[3] += w[3]*xj0;
-         y[4] += w[4]*xj0;
-         y[5] += w[5]*xj0;
-         y[6] += w[6]*xj0;
-         y[7] += w[7]*xj0;
-
-         y[0] += w[8]*xj1;
-         y[1] += w[9]*xj1;
-         y[2] += w[10]*xj1;
-         y[3] += w[11]*xj1;
-         y[4] += w[12]*xj1;
-         y[5] += w[13]*xj1;
-         y[6] += w[14]*xj1;
-         y[7] += w[15]*xj1;
-
-         y[0] += w[16]*xj2;
-         y[1] += w[17]*xj2;
-         y[2] += w[18]*xj2;
-         y[3] += w[19]*xj2;
-         y[4] += w[20]*xj2;
-         y[5] += w[21]*xj2;
-         y[6] += w[22]*xj2;
-         y[7] += w[23]*xj2;
-
-         y[0] += w[24]*xj3;
-         y[1] += w[25]*xj3;
-         y[2] += w[26]*xj3;
-         y[3] += w[27]*xj3;
-         y[4] += w[28]*xj3;
-         y[5] += w[29]*xj3;
-         y[6] += w[30]*xj3;
-         y[7] += w[31]*xj3;
+         xj0 = vld1q_dup_f32(&x[pos+0]);
+         xj1 = vld1q_dup_f32(&x[pos+1]);
+         xj2 = vld1q_dup_f32(&x[pos+2]);
+         xj3 = vld1q_dup_f32(&x[pos+3]);
+         y0_3 = vmlaq_f32(y0_3, vld1q_f32(&w[0]), xj0);
+         y4_7 = vmlaq_f32(y4_7, vld1q_f32(&w[4]), xj0);
+         y0_3 = vmlaq_f32(y0_3, vld1q_f32(&w[8]), xj1);
+         y4_7 = vmlaq_f32(y4_7, vld1q_f32(&w[12]), xj1);
+         y0_3 = vmlaq_f32(y0_3, vld1q_f32(&w[16]), xj2);
+         y4_7 = vmlaq_f32(y4_7, vld1q_f32(&w[20]), xj2);
+         y0_3 = vmlaq_f32(y0_3, vld1q_f32(&w[24]), xj3);
+         y4_7 = vmlaq_f32(y4_7, vld1q_f32(&w[28]), xj3);
          w += 32;
       }
+      vst1q_f32(&out[i], y0_3);
+      vst1q_f32(&out[i+4], y4_7);
    }
+}
+
+#define HAVE_SPARSE_SGEMV8X4_PAIR 1
+static inline void sparse_sgemv8x4_pair(
+    float * restrict out0,
+    float * restrict out1,
+    const float * restrict w,
+    const int * restrict idx,
+    int rows,
+    const float * restrict x0,
+    const float * restrict x1
+)
+{
+   int i, j;
+#define ACCUMULATE_PAIR(acc0_0_3, acc0_4_7, acc1_0_3, acc1_4_7, weights, offset, input_offset, pos) \
+      w0_3 = vld1q_f32(&(weights)[offset]); \
+      w4_7 = vld1q_f32(&(weights)[(offset)+4]); \
+      acc0_0_3 = vmlaq_f32(acc0_0_3, w0_3, vld1q_dup_f32(&x0[(pos)+(input_offset)])); \
+      acc0_4_7 = vmlaq_f32(acc0_4_7, w4_7, vld1q_dup_f32(&x0[(pos)+(input_offset)])); \
+      acc1_0_3 = vmlaq_f32(acc1_0_3, w0_3, vld1q_dup_f32(&x1[(pos)+(input_offset)])); \
+      acc1_4_7 = vmlaq_f32(acc1_4_7, w4_7, vld1q_dup_f32(&x1[(pos)+(input_offset)]))
+#define ACCUMULATE_BLOCK(acc0_0_3, acc0_4_7, acc1_0_3, acc1_4_7, weights, pos) \
+      ACCUMULATE_PAIR(acc0_0_3, acc0_4_7, acc1_0_3, acc1_4_7, weights, 0, 0, pos); \
+      ACCUMULATE_PAIR(acc0_0_3, acc0_4_7, acc1_0_3, acc1_4_7, weights, 8, 1, pos); \
+      ACCUMULATE_PAIR(acc0_0_3, acc0_4_7, acc1_0_3, acc1_4_7, weights, 16, 2, pos); \
+      ACCUMULATE_PAIR(acc0_0_3, acc0_4_7, acc1_0_3, acc1_4_7, weights, 24, 3, pos)
+   /* Interleave independent output-row groups to expose instruction-level
+      parallelism without changing any output's accumulation order. */
+   for (i=0;i+15<rows;i+=16)
+   {
+      int cols_a, cols_b, shared_cols;
+      const int *idx_a, *idx_b;
+      const float *w_a, *w_b;
+      float32x4_t a0_0_3 = vdupq_n_f32(0);
+      float32x4_t a0_4_7 = vdupq_n_f32(0);
+      float32x4_t a1_0_3 = vdupq_n_f32(0);
+      float32x4_t a1_4_7 = vdupq_n_f32(0);
+      float32x4_t b0_0_3 = vdupq_n_f32(0);
+      float32x4_t b0_4_7 = vdupq_n_f32(0);
+      float32x4_t b1_0_3 = vdupq_n_f32(0);
+      float32x4_t b1_4_7 = vdupq_n_f32(0);
+      cols_a = *idx++;
+      idx_a = idx;
+      w_a = w;
+      idx_b = idx_a + cols_a;
+      w_b = w_a + 32*cols_a;
+      cols_b = *idx_b++;
+      shared_cols = cols_a < cols_b ? cols_a : cols_b;
+      for (j=0;j<shared_cols;j++)
+      {
+         int pos_a, pos_b;
+         float32x4_t w0_3, w4_7;
+         pos_a = *idx_a++;
+         pos_b = *idx_b++;
+         ACCUMULATE_PAIR(a0_0_3, a0_4_7, a1_0_3, a1_4_7, w_a, 0, 0, pos_a);
+         ACCUMULATE_PAIR(b0_0_3, b0_4_7, b1_0_3, b1_4_7, w_b, 0, 0, pos_b);
+         ACCUMULATE_PAIR(a0_0_3, a0_4_7, a1_0_3, a1_4_7, w_a, 8, 1, pos_a);
+         ACCUMULATE_PAIR(b0_0_3, b0_4_7, b1_0_3, b1_4_7, w_b, 8, 1, pos_b);
+         ACCUMULATE_PAIR(a0_0_3, a0_4_7, a1_0_3, a1_4_7, w_a, 16, 2, pos_a);
+         ACCUMULATE_PAIR(b0_0_3, b0_4_7, b1_0_3, b1_4_7, w_b, 16, 2, pos_b);
+         ACCUMULATE_PAIR(a0_0_3, a0_4_7, a1_0_3, a1_4_7, w_a, 24, 3, pos_a);
+         ACCUMULATE_PAIR(b0_0_3, b0_4_7, b1_0_3, b1_4_7, w_b, 24, 3, pos_b);
+         w_a += 32;
+         w_b += 32;
+      }
+      for (;j<cols_a;j++)
+      {
+         int pos_a = *idx_a++;
+         float32x4_t w0_3, w4_7;
+         ACCUMULATE_BLOCK(a0_0_3, a0_4_7, a1_0_3, a1_4_7, w_a, pos_a);
+         w_a += 32;
+      }
+      for (j=shared_cols;j<cols_b;j++)
+      {
+         int pos_b = *idx_b++;
+         float32x4_t w0_3, w4_7;
+         ACCUMULATE_BLOCK(b0_0_3, b0_4_7, b1_0_3, b1_4_7, w_b, pos_b);
+         w_b += 32;
+      }
+      vst1q_f32(&out0[i], a0_0_3);
+      vst1q_f32(&out0[i+4], a0_4_7);
+      vst1q_f32(&out1[i], a1_0_3);
+      vst1q_f32(&out1[i+4], a1_4_7);
+      vst1q_f32(&out0[i+8], b0_0_3);
+      vst1q_f32(&out0[i+12], b0_4_7);
+      vst1q_f32(&out1[i+8], b1_0_3);
+      vst1q_f32(&out1[i+12], b1_4_7);
+      idx = idx_b;
+      w = w_b;
+   }
+   for (;i<rows;i+=8)
+   {
+      int cols = *idx++;
+      float32x4_t y0_0_3 = vdupq_n_f32(0);
+      float32x4_t y0_4_7 = vdupq_n_f32(0);
+      float32x4_t y1_0_3 = vdupq_n_f32(0);
+      float32x4_t y1_4_7 = vdupq_n_f32(0);
+      for (j=0;j<cols;j++)
+      {
+         int pos = *idx++;
+         float32x4_t w0_3, w4_7;
+         ACCUMULATE_BLOCK(y0_0_3, y0_4_7, y1_0_3, y1_4_7, w, pos);
+         w += 32;
+      }
+      vst1q_f32(&out0[i], y0_0_3);
+      vst1q_f32(&out0[i+4], y0_4_7);
+      vst1q_f32(&out1[i], y1_0_3);
+      vst1q_f32(&out1[i+4], y1_4_7);
+   }
+#undef ACCUMULATE_BLOCK
+#undef ACCUMULATE_PAIR
 }
 
 

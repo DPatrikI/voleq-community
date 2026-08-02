@@ -13,3 +13,22 @@ trees, reproduce the model, verify both upstream checksums, and replace the
 local model. Vendored source selection and local integration patches are
 reviewed and copied separately; regenerate `third_party/SOURCE_MANIFEST.sha256`
 after accepting any source update.
+
+## Local performance patch
+
+VolEq carries a reviewed local divergence from the pinned RNNoise revision for
+Apple-Silicon stereo processing. The ARM NEON sparse float matrix path replaces
+the upstream scalar fallback, and an internal paired entry point evaluates two
+independent recurrent states while reusing immutable weight loads across sparse
+GRU, dense, and convolution layers. The paired kernels interleave independent
+output rows but retain the accepted accumulation order for every output. A
+1,000-block stereo/right-only/anti-phase differential test is bit-exact for
+events, linked source selection and power, probability, SNR metadata, and every
+denoised sample in both debug and release-optimized builds. The downstream
+18/21/24 dB wet-mix decision is therefore unchanged.
+
+The two states retain separate feature, recurrent, gain, probability, synthesis,
+and history storage. No model data is changed, no frame is skipped, and the
+provided quantized model path is not used. Updated local-source checksums are
+recorded in `third_party/SOURCE_MANIFEST.sha256`; the upstream revision and model
+checksum above remain unchanged.
