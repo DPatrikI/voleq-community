@@ -127,6 +127,84 @@ boost, or loss of quiet-speech leveling remained in the accepted build.
 The affected synchronized route was retested and accepted after content analysis
 was split between the direct output clock and converted input clock.
 
+## Mild noise suppression
+
+Branch: `feat/mild-noise-suppression`
+
+Automated status: 117 Swift tests pass on 2026-08-02, including authorization,
+right-only, anti-phase, reset, allocation, 30 ms latency, real-model marker
+alignment, noise reduction, speech projection, stereo balance, and clean-speech
+transparency. Owner listening passed on 2026-08-02. The CPU gate still fails, so
+release acceptance remains pending.
+
+| Check | Result |
+| --- | --- |
+| Developer environment checks / Swift tests | 5 / 117 passed |
+| Separate suppression toggle | Off matches the accepted mono speech-aware path sample-for-sample on direct and two-way converted routes, keeps speech decisions active, applies no wet audio, uses input-rate content analysis on converted paths, and restores 20 ms latency |
+| Shared immutable model and independent L/R RNNoise state | Passed |
+| Max-channel probability with matching channel power drives linked decisions | Passed against two independent mono states |
+| 18 / 21 / 24 dB SNR taper | 50% / 25% / 0% wet |
+| Wet transition timing | 30 ms fade in / 100 ms fade out; bounded per-sample slope |
+| Seeded scripted-policy fixture with stationary noise | More than 3 dB noise reduction; projected speech change no more than 1 dB |
+| Bundled-RNNoise seeded broadband-noise fixture | At least 3 dB noise reduction, projected speech change no more than 1 dB, stereo-balance change no more than 0.5 dB |
+| Bundled-RNNoise clean speech | Level change no more than 0.1 dB; residual error below -28 dB relative to speech |
+| Music and sustained non-speech | Sample-for-sample dry after release |
+| Linked stereo balance | Change no more than 0.5 dB |
+| First warm-up blocks, non-finite input/wet samples, impossible wet ranges, and corrupt-processing recovery | Passed; warm-up is dry and failure is one-shot/silent |
+| Fresh-state reset, extreme finite input, 1,000-block stereo FIFO/source-index streams, and resampler drift at 16 / 44.1 / 48 kHz | Passed with conservative extreme-input failure and finite output |
+| First, resolved, and warmed direct/converted callbacks | Zero allocations for suppression-on stereo at 16 / 44.1 / 48 kHz, including both Speex resamplers and a converted 44.1→48 kHz route; suppression-off mono paths also pass under the test-thread interposer; contended settings/failure locks are skipped and factories are not called |
+| Route-change lifecycle | Teardown followed by fresh rate-specific stereo states and resumed finite 16 kHz processing passed |
+| Existing lookahead, limiter, downward compression, stereo linking, converted routes, 48→16 kHz call mode, cadence, and content-analysis rates | Passed |
+| Strict-concurrency build with warnings as errors | Passed |
+| Independent RNNoise wet alignment review | Finding fixed: main reconstruction is tagged `k - 2`; exact source-block markers and zero-lag seeded broadband correlation pass at all supported rates |
+| 48 kHz stereo release benchmark | **Failed target:** 15.60% of one core; target ≤5% |
+| Release app, ad-hoc signature, property list, and patch whitespace | Passed |
+
+The implementation's reported DSP latency includes measured Speex input and
+output delay:
+
+| Source rate | Speex input / output delay | Total DSP delay |
+| --- | --- | --- |
+| 16 kHz | 24 / 24 frames | 528 frames / 33.0 ms |
+| 44.1 kHz | 24 / 26 frames | 1,373 frames / about 31.13 ms |
+| 48 kHz | none | 1,440 frames / 30.0 ms |
+
+RNNoise source inspection and an independent impulse check showed output block
+0 silent, output block 1 about 34 dB below the main reconstruction, and the main
+source-block-0 reconstruction in output block 2. The implementation now treats
+both initial blocks as warm-up, tags wet output two blocks back, and compares SNR
+against the matching dry analysis block. The owner authorized 30 ms at 48 kHz
+on 2026-07-31. Real-model source-block marker tests pass after the correction.
+
+The release benchmark is warmed after reset, release-mode, 48 kHz stereo, and
+measures the DSP processing thread's CPU time divided by represented audio
+duration over 60 seconds. It does not claim to include Core Audio buffer
+traversal or the slower content-analysis queue.
+It ran on a MacBookPro18,3 with macOS 26.5.2 and Swift 6.3.3. The 15.60% result is
+above the required 5% gate and is intentionally recorded as a failure.
+
+### Physical listening gate
+
+The owner reported a passing physical test for mild suppression on 2026-08-02.
+The exact output device, microphone mode, and complete scenario matrix were not
+recorded, so this pass is not presented as per-device compatibility evidence.
+The earlier accepted device matrix validates leveling and routing only. Pending
+structured checks cover clean speech, speech with static, quiet-to-loud
+transitions, microphone bumps, and instrumental music on MacBook speakers,
+Sennheiser HDB 630, and AirPods Pro 2; each headset must be tested in regular
+playback and microphone-active mode.
+
+### Thirty-minute soak procedure
+
+This procedure is prepared but has not been run. Keep VolEq active for six
+consecutive five-minute stages: clean speech; speech with stationary noise;
+quiet/loud alternation; microphone bumps around speech; instrumental music; and
+mixed speech/music/noise. At each boundary record callback CPU, process memory,
+clicks, dropouts, and route state. Exercise the intended output and microphone
+profile changes between stages where practical. After the final stage stop
+leveling and confirm that the original audio path is restored. Do not mark the
+soak passed without the full uninterrupted observation record.
+
 ## Release validation backlog
 
 Before `v0.1.0`, test Teams, Zoom, Meet, browser meetings, wired output, live route switching, process disappearance, sleep/wake, permission recovery, CPU use, memory behavior, and long-running stability. Compatibility claims must distinguish automated coverage from physical-device evidence.

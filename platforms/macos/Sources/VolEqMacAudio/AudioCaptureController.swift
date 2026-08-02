@@ -30,6 +30,7 @@ public final class AudioCaptureController: ObservableObject {
     @Published public var selectedProcessID: AudioObjectID?
     @Published public var mode: CaptureMode = .application
     @Published public var speechAwarenessEnabled = true
+    @Published public var noiseSuppressionEnabled = true
     @Published public var levelingSettings = LevelingSettings() {
         didSet { audioProcessor?.updateSettings(levelingSettings) }
     }
@@ -50,6 +51,8 @@ public final class AudioCaptureController: ObservableObject {
     private var routeRecoveryTask: Task<Void, Never>?
     private var processingDiagnosticsTask: Task<Void, Never>?
     private let stopResourcesDidRun: (() -> Void)?
+    private let startPipelineOverride: (@MainActor () -> Void)?
+    private let routeRecoveryDelayNanoseconds: UInt64
     private let ioQueue = DispatchQueue(
         label: "com.patrikistvandoczy.voleq.community.audio",
         qos: .userInteractive
@@ -66,10 +69,14 @@ public final class AudioCaptureController: ObservableObject {
     init(
         installSystemObservers: Bool,
         initiallyRunning: Bool = false,
-        stopResourcesDidRun: (() -> Void)? = nil
+        stopResourcesDidRun: (() -> Void)? = nil,
+        startPipelineOverride: (@MainActor () -> Void)? = nil,
+        routeRecoveryDelayNanoseconds: UInt64 = 350_000_000
     ) {
         isRunning = initiallyRunning
         self.stopResourcesDidRun = stopResourcesDidRun
+        self.startPipelineOverride = startPipelineOverride
+        self.routeRecoveryDelayNanoseconds = routeRecoveryDelayNanoseconds
         if installSystemObservers {
             refreshProcesses()
             do {
@@ -146,6 +153,10 @@ public final class AudioCaptureController: ObservableObject {
     }
 
     private func startPipeline() {
+        if let startPipelineOverride {
+            startPipelineOverride()
+            return
+        }
         stopResources()
 
         do {
@@ -243,6 +254,7 @@ public final class AudioCaptureController: ObservableObject {
                 outputFormat: outputFormat,
                 settings: levelingSettings,
                 speechAwarenessEnabled: speechAwarenessEnabled,
+                noiseSuppressionEnabled: noiseSuppressionEnabled,
                 speechModel: speechModel,
                 systemContentAnalysisEnabled: speechAwarenessEnabled
             )
@@ -459,13 +471,20 @@ public final class AudioCaptureController: ObservableObject {
         routeRecoveryTask?.cancel()
         stopResources()
         status = "The output device changed. Reconnecting safely…"
+        let recoveryDelayNanoseconds = routeRecoveryDelayNanoseconds
         routeRecoveryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(nanoseconds: recoveryDelayNanoseconds)
             guard let self, !Task.isCancelled, self.isRunning else { return }
             self.routeRecoveryTask = nil
             self.startPipeline()
         }
     }
+
+#if DEBUG
+    func _testOnlyHandleOutputRouteChange() {
+        handleOutputRouteChange()
+    }
+#endif
 
     @discardableResult
     func recoverPendingProcessingFailure(from processor: AudioIOProcessor) -> Bool {

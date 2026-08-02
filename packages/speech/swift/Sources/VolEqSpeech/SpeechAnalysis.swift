@@ -48,3 +48,50 @@ public protocol SpeechAnalyzing: AnyObject {
     func reset()
 }
 
+/// Metadata for one source-rate block whose denoised stereo samples are ready.
+///
+/// Samples remain in processor-owned preallocated storage until
+/// `consumeDenoisedBlock()` is called. This avoids returning an Array from the
+/// real-time callback.
+public struct DenoisedSpeechBlock: Sendable, Equatable {
+    public let sourceStartFrameIndex: Int64
+    public let sourceFrameCount: Int
+    public let speechProbability: Float
+    public let sourcePower: Float
+    public let estimatedSNRDB: Float?
+
+    public init(
+        sourceStartFrameIndex: Int64,
+        sourceFrameCount: Int,
+        speechProbability: Float,
+        sourcePower: Float,
+        estimatedSNRDB: Float?
+    ) {
+        self.sourceStartFrameIndex = sourceStartFrameIndex
+        self.sourceFrameCount = sourceFrameCount
+        self.speechProbability = speechProbability
+        self.sourcePower = sourcePower
+        self.estimatedSNRDB = estimatedSNRDB
+    }
+}
+
+/// Prepared stereo speech analysis and enhancement.
+///
+/// Construction, latency inspection, reset, and destruction are control-thread
+/// operations. The remaining members are real-time safe when one serialized
+/// audio callback owns the instance.
+public protocol StereoSpeechProcessing: AnyObject {
+    var sourceSampleRate: Double { get }
+    var sourceBlockFrameCount: Int { get }
+    var decisionLatencyFrameCount: Int { get }
+    var processingLatencyFrameCount: Int { get }
+    var inputResamplerLatencyFrameCount: Int { get }
+    var outputResamplerLatencyFrameCount: Int { get }
+
+    func processStereoFrame(left: Float, right: Float) -> SpeechAnalysisEvent
+
+    var pendingDenoisedBlock: DenoisedSpeechBlock? { get }
+    func denoisedSample(frame: Int, channel: Int) -> Float
+    func consumeDenoisedBlock()
+    func reset()
+}

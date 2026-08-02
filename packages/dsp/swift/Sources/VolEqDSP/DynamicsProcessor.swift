@@ -52,6 +52,8 @@ public final class DynamicsProcessor: @unchecked Sendable {
         let detectorAttackCoefficient: Float
         let detectorReleaseCoefficient: Float
         let speechGainRiseCoefficient: Float
+        let suppressionAttackStep: Float
+        let suppressionReleaseStep: Float
         let limiterAmplitude: Float
         let lookaheadFrameCount: Int
     }
@@ -63,6 +65,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
 
     private let sampleRate: Float
     private let speechAnalyzer: (any SpeechAnalyzing)?
+    private let stereoSpeechProcessor: (any StereoSpeechProcessing)?
     private let upwardGainAuthorizer: (any UpwardGainAuthorizing)?
     private let appliesSpeechLeveling: Bool
     private let minimumLookaheadFrameCount: Int
@@ -78,11 +81,21 @@ public final class DynamicsProcessor: @unchecked Sendable {
     private var delayedRight: [Float]
     private var delayedMaximumGain: [Float]
     private var delayedUpwardEligibility: [Float]
+    private var delayedWetLeft: [Float]
+    private var delayedWetRight: [Float]
+    private var delayedWetValid: [Bool]
+    private var delayedSuppressionTarget: [Float]
+    private var delayedSourceFrameIndex: [Int64]
     private var delayWriteIndex = 0
     private var delayedFrameCount = 0
     private var activeLookaheadFrameCount: Int
     private var currentUpwardEligibility: Float
     private var speechGate: SpeechLevelingGate
+    private var suppressionGate = NoiseSuppressionActivityGate()
+    private var suppressionMix: Float = 0
+    private var lastSuppressionBlockStart: Int64 = -1
+    private var lastSuppressionTarget: Float = 0
+    private var sourceFrameIndex: Int64 = -1
     private var processingFailed = false
     private var analysisLeftBlock: [Float]
     private var analysisRightBlock: [Float]
@@ -93,6 +106,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
             sampleRate: sampleRate,
             settings: settings,
             speechAnalyzer: nil,
+            stereoSpeechProcessor: nil,
             upwardGainAuthorizer: nil,
             appliesSpeechLeveling: false,
             minimumLookaheadFrameCount: 0
@@ -115,6 +129,45 @@ public final class DynamicsProcessor: @unchecked Sendable {
             speechAnalyzer: speechAnalyzer,
             upwardGainAuthorizer: upwardGainAuthorizer,
             appliesSpeechLeveling: true
+        )
+    }
+
+    /// Creates a processor whose stereo RNNoise output shares the delay timeline.
+    public convenience init(
+        sampleRate: Double,
+        settings: LevelingSettings = LevelingSettings(),
+        stereoSpeechProcessor: any StereoSpeechProcessing,
+        upwardGainAuthorizer: (any UpwardGainAuthorizing)? = nil
+    ) throws {
+        let rate = Self.normalizedSampleRate(sampleRate)
+        let maximumLookaheadFrameCount = max(Int((rate * 0.050).rounded(.up)), 1)
+        guard stereoSpeechProcessor.sourceBlockFrameCount > 0,
+              stereoSpeechProcessor.decisionLatencyFrameCount
+                >= stereoSpeechProcessor.sourceBlockFrameCount,
+              stereoSpeechProcessor.processingLatencyFrameCount
+                >= stereoSpeechProcessor.decisionLatencyFrameCount else {
+            throw DynamicsProcessorError.invalidAnalyzerConfiguration
+        }
+        guard abs(stereoSpeechProcessor.sourceSampleRate - Double(rate)) < 0.5 else {
+            throw DynamicsProcessorError.analyzerSampleRateMismatch(
+                expected: Double(rate),
+                actual: stereoSpeechProcessor.sourceSampleRate
+            )
+        }
+        guard stereoSpeechProcessor.processingLatencyFrameCount <= maximumLookaheadFrameCount else {
+            throw DynamicsProcessorError.analysisLatencyExceedsCapacity(
+                latencyFrames: stereoSpeechProcessor.processingLatencyFrameCount,
+                capacityFrames: maximumLookaheadFrameCount
+            )
+        }
+        self.init(
+            sampleRate: sampleRate,
+            settings: settings,
+            speechAnalyzer: nil,
+            stereoSpeechProcessor: stereoSpeechProcessor,
+            upwardGainAuthorizer: upwardGainAuthorizer,
+            appliesSpeechLeveling: true,
+            minimumLookaheadFrameCount: stereoSpeechProcessor.processingLatencyFrameCount
         )
     }
 
@@ -147,6 +200,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
             sampleRate: sampleRate,
             settings: settings,
             speechAnalyzer: speechAnalyzer,
+            stereoSpeechProcessor: nil,
             upwardGainAuthorizer: upwardGainAuthorizer,
             appliesSpeechLeveling: appliesSpeechLeveling,
             minimumLookaheadFrameCount: speechAnalyzer.analysisLatencyFrameCount
@@ -157,6 +211,7 @@ public final class DynamicsProcessor: @unchecked Sendable {
         sampleRate: Double,
         settings: LevelingSettings,
         speechAnalyzer: (any SpeechAnalyzing)?,
+        stereoSpeechProcessor: (any StereoSpeechProcessing)?,
         upwardGainAuthorizer: (any UpwardGainAuthorizing)?,
         appliesSpeechLeveling: Bool,
         minimumLookaheadFrameCount: Int
@@ -170,10 +225,12 @@ public final class DynamicsProcessor: @unchecked Sendable {
         )
         self.sampleRate = rate
         self.speechAnalyzer = speechAnalyzer
+        self.stereoSpeechProcessor = stereoSpeechProcessor
         self.upwardGainAuthorizer = upwardGainAuthorizer
-        self.appliesSpeechLeveling = appliesSpeechLeveling && speechAnalyzer != nil
+        self.appliesSpeechLeveling = appliesSpeechLeveling
+            && (speechAnalyzer != nil || stereoSpeechProcessor != nil)
         self.minimumLookaheadFrameCount = minimumLookaheadFrameCount
-        fixedSpeechLookaheadSeconds = speechAnalyzer == nil
+        fixedSpeechLookaheadSeconds = speechAnalyzer == nil && stereoSpeechProcessor == nil
             ? nil
             : parameters.settings.lookaheadSeconds
         sharedParameters = parameters
@@ -194,6 +251,11 @@ public final class DynamicsProcessor: @unchecked Sendable {
             repeating: self.appliesSpeechLeveling ? 0 : 1,
             count: maximumLookaheadFrameCount
         )
+        delayedWetLeft = Array(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedWetRight = Array(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedWetValid = Array(repeating: false, count: maximumLookaheadFrameCount)
+        delayedSuppressionTarget = Array(repeating: 0, count: maximumLookaheadFrameCount)
+        delayedSourceFrameIndex = Array(repeating: -1, count: maximumLookaheadFrameCount)
     }
 
     public var settings: LevelingSettings {
@@ -246,6 +308,17 @@ public final class DynamicsProcessor: @unchecked Sendable {
         realtimeParameters = parameters
     }
 
+#if DEBUG
+    /// Test-only proof that the callback snapshot uses `try()` and never waits.
+    package func _testOnlyWithParameterLockHeld<Result>(
+        _ body: () throws -> Result
+    ) rethrows -> Result {
+        parameterLock.lock()
+        defer { parameterLock.unlock() }
+        return try body()
+    }
+#endif
+
     /// Clears detector, gain, and lookahead history while audio processing is stopped.
     /// A rebuilt output route creates a new processor and therefore starts in this state.
     public func reset() {
@@ -255,14 +328,21 @@ public final class DynamicsProcessor: @unchecked Sendable {
         parameterLock.unlock()
         resetRealtimeState(lookaheadFrameCount: parameters.lookaheadFrameCount)
         speechAnalyzer?.reset()
+        stereoSpeechProcessor?.reset()
     }
 
     /// Processes one linked-stereo frame with the current real-time parameter snapshot.
     public func processFrame(left: Float, right: Float) -> (left: Float, right: Float) {
-        guard !processingFailed, left.isFinite, right.isFinite else {
+        let maximumSafeInputAmplitude = sqrtf(Float.greatestFiniteMagnitude * 0.25)
+        guard !processingFailed,
+              left.isFinite,
+              right.isFinite,
+              abs(left) <= maximumSafeInputAmplitude,
+              abs(right) <= maximumSafeInputAmplitude else {
             processingFailed = true
             return (0, 0)
         }
+        sourceFrameIndex += 1
         analyzeSpeech(left: left, right: right, parameters: realtimeParameters)
         guard !processingFailed else { return (0, 0) }
 
@@ -282,10 +362,12 @@ public final class DynamicsProcessor: @unchecked Sendable {
             upwardEligibility: delayedFrame.upwardEligibility,
             parameters: realtimeParameters
         )
+        let suppressed = suppressNoise(delayedFrame, parameters: realtimeParameters)
+        guard !processingFailed else { return (0, 0) }
         return apply(
             gain: outputGain,
-            left: delayedFrame.left,
-            right: delayedFrame.right,
+            left: suppressed.left,
+            right: suppressed.right,
             parameters: realtimeParameters
         )
     }
@@ -423,10 +505,19 @@ public final class DynamicsProcessor: @unchecked Sendable {
         right: Float,
         maximumGain: Float,
         upwardEligibility: Float
-    ) -> (left: Float, right: Float, maximumGain: Float, upwardEligibility: Float) {
+    ) -> (
+        left: Float,
+        right: Float,
+        maximumGain: Float,
+        upwardEligibility: Float,
+        wetLeft: Float,
+        wetRight: Float,
+        wetValid: Bool,
+        suppressionTarget: Float
+    ) {
         let lookaheadFrameCount = activeLookaheadFrameCount
         guard lookaheadFrameCount > 0 else {
-            return (left, right, maximumGain, upwardEligibility)
+            return (left, right, maximumGain, upwardEligibility, 0, 0, false, 0)
         }
 
         if delayedFrameCount < lookaheadFrameCount {
@@ -434,24 +525,34 @@ public final class DynamicsProcessor: @unchecked Sendable {
             delayedRight[delayWriteIndex] = right
             delayedMaximumGain[delayWriteIndex] = maximumGain
             delayedUpwardEligibility[delayWriteIndex] = upwardEligibility
+            delayedWetValid[delayWriteIndex] = false
+            delayedSuppressionTarget[delayWriteIndex] = 0
+            delayedSourceFrameIndex[delayWriteIndex] = sourceFrameIndex
             delayWriteIndex += 1
             if delayWriteIndex == lookaheadFrameCount {
                 delayWriteIndex = 0
             }
             delayedFrameCount += 1
-            return (0, 0, Float.greatestFiniteMagnitude, 0)
+            return (0, 0, Float.greatestFiniteMagnitude, 0, 0, 0, false, 0)
         }
 
         let output = (
             left: delayedLeft[delayWriteIndex],
             right: delayedRight[delayWriteIndex],
             maximumGain: delayedMaximumGain[delayWriteIndex],
-            upwardEligibility: delayedUpwardEligibility[delayWriteIndex]
+            upwardEligibility: delayedUpwardEligibility[delayWriteIndex],
+            wetLeft: delayedWetLeft[delayWriteIndex],
+            wetRight: delayedWetRight[delayWriteIndex],
+            wetValid: delayedWetValid[delayWriteIndex],
+            suppressionTarget: delayedSuppressionTarget[delayWriteIndex]
         )
         delayedLeft[delayWriteIndex] = left
         delayedRight[delayWriteIndex] = right
         delayedMaximumGain[delayWriteIndex] = maximumGain
         delayedUpwardEligibility[delayWriteIndex] = upwardEligibility
+        delayedWetValid[delayWriteIndex] = false
+        delayedSuppressionTarget[delayWriteIndex] = 0
+        delayedSourceFrameIndex[delayWriteIndex] = sourceFrameIndex
         delayWriteIndex += 1
         if delayWriteIndex == lookaheadFrameCount {
             delayWriteIndex = 0
@@ -463,8 +564,13 @@ public final class DynamicsProcessor: @unchecked Sendable {
         powerEnvelope = 0
         smoothedGain = 1
         smoothedSpeechOutputGain = 1
+        suppressionMix = 0
+        lastSuppressionBlockStart = -1
+        lastSuppressionTarget = 0
         currentUpwardEligibility = appliesSpeechLeveling ? 0 : 1
         speechGate.reset()
+        suppressionGate.reset()
+        sourceFrameIndex = -1
         processingFailed = false
         analysisBlockFrameCount = 0
         delayWriteIndex = 0
@@ -491,6 +597,8 @@ public final class DynamicsProcessor: @unchecked Sendable {
                 sampleRate: sampleRate
             ),
             speechGainRiseCoefficient: coefficient(seconds: 0.030, sampleRate: sampleRate),
+            suppressionAttackStep: 0.5 / max(0.030 * sampleRate, 1),
+            suppressionReleaseStep: 0.5 / max(0.100 * sampleRate, 1),
             limiterAmplitude: powf(10, settings.limiterDB / 20),
             lookaheadFrameCount: max(
                 Int((settings.lookaheadSeconds * sampleRate).rounded()),
@@ -531,6 +639,22 @@ public final class DynamicsProcessor: @unchecked Sendable {
         right: Float,
         parameters: RuntimeParameters
     ) {
+        if let stereoSpeechProcessor {
+            handleSpeechEvent(
+                stereoSpeechProcessor.processStereoFrame(left: left, right: right),
+                parameters: parameters
+            )
+            guard !processingFailed else { return }
+            if let block = stereoSpeechProcessor.pendingDenoisedBlock {
+                backfillDenoisedBlock(
+                    block,
+                    from: stereoSpeechProcessor,
+                    parameters: parameters
+                )
+                stereoSpeechProcessor.consumeDenoisedBlock()
+            }
+            return
+        }
         guard let speechAnalyzer else { return }
         analysisLeftBlock[analysisBlockFrameCount] = left
         analysisRightBlock[analysisBlockFrameCount] = right
@@ -566,6 +690,121 @@ public final class DynamicsProcessor: @unchecked Sendable {
             )
             if processingFailed { return }
         }
+    }
+
+    private func backfillDenoisedBlock(
+        _ block: DenoisedSpeechBlock,
+        from processor: any StereoSpeechProcessing,
+        parameters: RuntimeParameters
+    ) {
+        guard block.sourceStartFrameIndex >= 0,
+              block.sourceFrameCount > 0,
+              block.sourceFrameCount <= processor.sourceBlockFrameCount,
+              block.speechProbability.isFinite,
+              (0...1).contains(block.speechProbability),
+              block.sourcePower.isFinite,
+              block.sourcePower >= 0 else {
+            processingFailed = true
+            return
+        }
+        let (lastSourceFrameIndex, sourceRangeOverflowed) = block.sourceStartFrameIndex
+            .addingReportingOverflow(Int64(block.sourceFrameCount - 1))
+        guard !sourceRangeOverflowed, lastSourceFrameIndex <= sourceFrameIndex else {
+            processingFailed = true
+            return
+        }
+        let nominalBlockSize = Int64(processor.sourceBlockFrameCount)
+        let suppressionBlockStart = (
+            block.sourceStartFrameIndex / nominalBlockSize
+        ) * nominalBlockSize
+        let target: Float
+        if suppressionBlockStart == lastSuppressionBlockStart {
+            target = lastSuppressionTarget
+        } else {
+            let result = SpeechAnalysisResult(
+                probability: block.speechProbability,
+                sourcePower: block.sourcePower,
+                sourceFrameCount: processor.sourceBlockFrameCount,
+                analysisLatencyFrameCount: processor.decisionLatencyFrameCount
+            )
+            let speechIsActive = suppressionGate.observe(
+                result,
+                sampleRate: sampleRate,
+                fixedNoiseGateDB: parameters.settings.noiseGateDB,
+                compressionThresholdDB: parameters.settings.thresholdDB,
+                learnedNoiseFloorDB: speechGate.learnedNoiseFloorDB
+            )
+            target = speechIsActive && upwardGainAuthorizer?.allowsUpwardGain == true
+                ? suppressionTarget(snrDB: block.estimatedSNRDB)
+                : 0
+            lastSuppressionBlockStart = suppressionBlockStart
+            lastSuppressionTarget = target
+        }
+
+        for frame in 0..<block.sourceFrameCount {
+            let wetLeft = processor.denoisedSample(frame: frame, channel: 0)
+            let wetRight = processor.denoisedSample(frame: frame, channel: 1)
+            guard wetLeft.isFinite, wetRight.isFinite else {
+                processingFailed = true
+                return
+            }
+            let wantedSourceIndex = block.sourceStartFrameIndex + Int64(frame)
+            let age = sourceFrameIndex - wantedSourceIndex
+            guard age > 0, age <= Int64(delayedFrameCount) else {
+                processingFailed = true
+                return
+            }
+            let slot = (
+                delayWriteIndex - Int(age) + activeLookaheadFrameCount
+            ) % activeLookaheadFrameCount
+            guard delayedSourceFrameIndex[slot] == wantedSourceIndex else {
+                processingFailed = true
+                return
+            }
+            delayedWetLeft[slot] = wetLeft
+            delayedWetRight[slot] = wetRight
+            delayedWetValid[slot] = true
+            delayedSuppressionTarget[slot] = target
+        }
+    }
+
+    private func suppressionTarget(snrDB: Float?) -> Float {
+        guard let snrDB, snrDB.isFinite, snrDB < 24 else { return 0 }
+        guard snrDB > 18 else { return 0.5 }
+        let position = min(max((24 - snrDB) / 6, 0), 1)
+        return 0.5 * smoothstep(position)
+    }
+
+    private func suppressNoise(
+        _ frame: (
+            left: Float,
+            right: Float,
+            maximumGain: Float,
+            upwardEligibility: Float,
+            wetLeft: Float,
+            wetRight: Float,
+            wetValid: Bool,
+            suppressionTarget: Float
+        ),
+        parameters: RuntimeParameters
+    ) -> (left: Float, right: Float) {
+        let target = frame.wetValid ? frame.suppressionTarget : 0
+        if target > suppressionMix {
+            suppressionMix = min(target, suppressionMix + parameters.suppressionAttackStep)
+        } else if target < suppressionMix {
+            suppressionMix = max(target, suppressionMix - parameters.suppressionReleaseStep)
+        }
+        guard frame.wetValid, suppressionMix > 0 else {
+            return (frame.left, frame.right)
+        }
+        let dryMix = 1 - suppressionMix
+        let left = frame.left * dryMix + frame.wetLeft * suppressionMix
+        let right = frame.right * dryMix + frame.wetRight * suppressionMix
+        guard left.isFinite, right.isFinite else {
+            processingFailed = true
+            return (0, 0)
+        }
+        return (left, right)
     }
 
     private func handleSpeechEvent(

@@ -79,6 +79,18 @@ struct ContentView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
+            Toggle("Mild noise suppression", isOn: $audio.noiseSuppressionEnabled)
+                .disabled(audio.isRunning || !audio.speechAwarenessEnabled)
+            Text(
+                !audio.speechAwarenessEnabled
+                    ? "Available when speech-aware leveling is on."
+                    : audio.noiseSuppressionEnabled
+                        ? "On: gently reduces stationary noise while speech is active."
+                        : "Off: speech-aware leveling stays active without denoising."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             if audio.mode == .application {
                 HStack {
                     Picker("Application", selection: $audio.selectedProcessID) {
@@ -121,7 +133,7 @@ struct ContentView: View {
             .controlSize(.large)
             .disabled(!audio.isRunning && audio.mode == .application && audio.selectedProcessID == nil)
 
-            Text("VolEq uses a carefully chosen speech-leveling preset. Advanced controls and automation are planned for VolEq Premium.")
+            Text("VolEq uses carefully chosen speech-leveling and mild-suppression presets. Advanced controls and automation are planned for VolEq Premium.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }

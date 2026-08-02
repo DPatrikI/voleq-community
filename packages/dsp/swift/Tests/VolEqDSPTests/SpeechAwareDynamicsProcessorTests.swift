@@ -576,6 +576,56 @@ final class SpeechAwareDynamicsProcessorTests: XCTestCase {
         XCTAssertFalse(processor.consumeProcessingFailure())
     }
 
+    func testRealStereoRNNoiseStreamRemainsFinite() throws {
+        let model = try RNNoiseModelResource.bundled()
+        for rate in [16_000.0, 44_100.0, 48_000.0] {
+            let speech = try RNNoiseStereoProcessor(sampleRate: rate, model: model)
+            let authority = MutableUpwardGainAuthority(allowsUpwardGain: true)
+            let processor = try DynamicsProcessor(
+                sampleRate: rate,
+                stereoSpeechProcessor: speech,
+                upwardGainAuthorizer: authority
+            )
+            for frame in 0..<Int(rate / 2) {
+                let left = Float(sin(Double(frame) * 0.043)) * 0.05
+                let right = Float(sin(Double(frame) * 0.037)) * 0.04
+                let output = processor.processFrame(left: left, right: right)
+                XCTAssertTrue(output.left.isFinite)
+                XCTAssertTrue(output.right.isFinite)
+                if processor.consumeProcessingFailure() {
+                    XCTFail("failed at rate \(rate), frame \(frame)")
+                    break
+                }
+            }
+        }
+    }
+
+    func testRealStereoRNNoiseDryImpulseUsesExactReportedLatency() throws {
+        let model = try RNNoiseModelResource.bundled()
+        let expectations = [(16_000.0, 528), (44_100.0, 1_373), (48_000.0, 1_440)]
+        for (rate, expectedLatency) in expectations {
+            let speech = try RNNoiseStereoProcessor(sampleRate: rate, model: model)
+            let authority = MutableUpwardGainAuthority(allowsUpwardGain: false)
+            let processor = try DynamicsProcessor(
+                sampleRate: rate,
+                stereoSpeechProcessor: speech,
+                upwardGainAuthorizer: authority
+            )
+            XCTAssertEqual(processor.latencyFrameCount, expectedLatency)
+
+            var firstAudibleFrame: Int?
+            for frame in 0..<(expectedLatency + 8) {
+                let input: Float = frame == 0 ? 0.05 : 0
+                let output = processor.processFrame(left: input, right: input)
+                if firstAudibleFrame == nil, abs(output.left) > 0.000_001 {
+                    firstAudibleFrame = frame
+                }
+            }
+            XCTAssertEqual(firstAudibleFrame, expectedLatency, "rate \(rate)")
+            XCTAssertFalse(processor.consumeProcessingFailure(), "rate \(rate)")
+        }
+    }
+
     private func result(
         probability: Float,
         power: Float = 0.01,

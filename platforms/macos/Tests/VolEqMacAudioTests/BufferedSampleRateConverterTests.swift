@@ -83,7 +83,7 @@ final class BufferedSampleRateConverterTests: XCTestCase {
         XCTAssertFalse(processor.usesSampleRateConversion)
         XCTAssertEqual(processor.inputSampleRate, 44_100)
         XCTAssertEqual(processor.outputSampleRate, 44_100)
-        XCTAssertEqual(processor.directProcessingLatencyFrameCount, 882)
+        XCTAssertEqual(processor.directProcessingLatencyFrameCount, 1_373)
     }
 
     func testEqualCallbackPeriodsBypassDuplicateNominalRateConversion() throws {
@@ -111,7 +111,7 @@ final class BufferedSampleRateConverterTests: XCTestCase {
                 resolvedOutput.append(contentsOf: stride(from: 0, to: output.count, by: 2).map {
                     output[$0]
                 })
-                if resolvedOutput.count > 882 { break }
+                if resolvedOutput.count > 1_373 { break }
             }
         }
 
@@ -124,7 +124,7 @@ final class BufferedSampleRateConverterTests: XCTestCase {
             )
         )
         let firstAudibleFrame = resolvedOutput.firstIndex { abs($0) > 0.12 }
-        XCTAssertEqual(firstAudibleFrame, 882)
+        XCTAssertEqual(firstAudibleFrame, 1_373)
     }
 
     func testEqualFrameCountsOnDifferentClocksKeepSampleRateConversion() throws {
@@ -315,6 +315,146 @@ final class BufferedSampleRateConverterTests: XCTestCase {
 
         XCTAssertTrue(creations.values.isEmpty)
         XCTAssertEqual(processor.directProcessingLatencyFrameCount, 960)
+    }
+
+    func testDisablingOnlyNoiseSuppressionKeepsSpeechAwareLevelingDry() throws {
+        let model = try RNNoiseModelResource.bundled()
+        let format = floatFormat(sampleRate: 48_000, channelCount: 2)
+        let suppressionDisabled = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings(),
+            speechAwarenessEnabled: true,
+            noiseSuppressionEnabled: false,
+            speechModel: model
+        )
+        let speechAwareBaseline = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings(),
+            speechAwarenessEnabled: true,
+            speechModel: model,
+            speechAnalyzerFactory: { sampleRate in
+                try RNNoiseSpeechAnalyzer(sampleRate: sampleRate, model: model)
+            }
+        )
+
+        XCTAssertEqual(suppressionDisabled.directProcessingLatencyFrameCount, 960)
+        XCTAssertEqual(speechAwareBaseline.directProcessingLatencyFrameCount, 960)
+
+        for callback in 0..<24 {
+            var input = (0..<480).flatMap { frame -> [Float] in
+                let absoluteFrame = callback * 480 + frame
+                let voiced = Float(
+                    sin(Double(absoluteFrame) * 0.071)
+                        + 0.4 * sin(Double(absoluteFrame) * 0.143)
+                ) * 0.05
+                let noise = Float((absoluteFrame * 31) % 127 - 63) / 63 * 0.01
+                return [voiced + noise, voiced * 0.82 - noise]
+            }
+            var actual = Array(repeating: Float.zero, count: input.count)
+            var expected = Array(repeating: Float.zero, count: input.count)
+            withInterleavedStereoBuffer(samples: &input) { inputList in
+                withMutableInterleavedBuffer(samples: &actual, channelCount: 2) { outputList in
+                    suppressionDisabled.process(input: inputList, output: outputList)
+                }
+                withMutableInterleavedBuffer(samples: &expected, channelCount: 2) { outputList in
+                    speechAwareBaseline.process(input: inputList, output: outputList)
+                }
+            }
+            assertSamplesEqual(actual, expected)
+        }
+        XCTAssertNil(suppressionDisabled.takePendingFailure())
+    }
+
+    func testSuppressionDisabledMatchesMonoSpeechAwareConvertedPathsSampleForSample() throws {
+        let model = try RNNoiseModelResource.bundled()
+        for (inputRate, inputFrames, outputRate, outputFrames) in [
+            (48_000.0, 480, 44_100.0, 441),
+            (44_100.0, 441, 48_000.0, 480)
+        ] {
+            let actualContent = ContentAnalyzerRecorder()
+            let expectedContent = ContentAnalyzerRecorder()
+            let inputFormat = floatFormat(sampleRate: inputRate, channelCount: 2)
+            let outputFormat = floatFormat(sampleRate: outputRate, channelCount: 2)
+            let suppressionDisabled = try AudioIOProcessor(
+                inputFormat: inputFormat,
+                outputFormat: outputFormat,
+                settings: neutralSettings(),
+                speechAwarenessEnabled: true,
+                noiseSuppressionEnabled: false,
+                speechModel: model,
+                contentAnalyzerFactory: { actualContent.make(sampleRate: $0) }
+            )
+            let speechAwareBaseline = try AudioIOProcessor(
+                inputFormat: inputFormat,
+                outputFormat: outputFormat,
+                settings: neutralSettings(),
+                speechAwarenessEnabled: true,
+                speechModel: model,
+                speechAnalyzerFactory: { sampleRate in
+                    try RNNoiseSpeechAnalyzer(sampleRate: sampleRate, model: model)
+                },
+                contentAnalyzerFactory: { expectedContent.make(sampleRate: $0) }
+            )
+            XCTAssertEqual(
+                suppressionDisabled.conversionProcessingLatencyFrameCount,
+                Int((inputRate * 0.020).rounded())
+            )
+
+            for callback in 0..<24 {
+                var input = (0..<inputFrames).flatMap { frame -> [Float] in
+                    let absoluteFrame = callback * inputFrames + frame
+                    let voiced = Float(
+                        sin(2 * Double.pi * 190 * Double(absoluteFrame) / inputRate)
+                            + 0.35 * sin(
+                                2 * Double.pi * 380 * Double(absoluteFrame) / inputRate
+                            )
+                    ) * 0.05
+                    let noise = Float((absoluteFrame * 29) % 131 - 65) / 65 * 0.01
+                    return [voiced + noise, voiced * 0.8 - noise]
+                }
+                var actual = Array(repeating: Float.zero, count: outputFrames * 2)
+                var expected = Array(repeating: Float.zero, count: outputFrames * 2)
+                let timestamp = hostTimestamp(UInt64(callback * 10_000))
+                withInterleavedStereoBuffer(samples: &input) { inputList in
+                    withMutableInterleavedBuffer(
+                        samples: &actual,
+                        channelCount: 2
+                    ) { outputList in
+                        suppressionDisabled.process(
+                            input: inputList,
+                            inputTime: timestamp,
+                            output: outputList,
+                            outputTime: timestamp
+                        )
+                    }
+                    withMutableInterleavedBuffer(
+                        samples: &expected,
+                        channelCount: 2
+                    ) { outputList in
+                        speechAwareBaseline.process(
+                            input: inputList,
+                            inputTime: timestamp,
+                            output: outputList,
+                            outputTime: timestamp
+                        )
+                    }
+                }
+                assertSamplesEqual(actual, expected)
+            }
+
+            XCTAssertEqual(
+                suppressionDisabled.currentDiagnostics()?.path,
+                .sampleRateConverter
+            )
+            XCTAssertGreaterThan(actualContent.appendedFrameCount(at: inputRate), 0)
+            XCTAssertEqual(actualContent.appendedFrameCount(at: outputRate), 0)
+            XCTAssertGreaterThan(expectedContent.appendedFrameCount(at: inputRate), 0)
+            XCTAssertEqual(expectedContent.appendedFrameCount(at: outputRate), 0)
+            XCTAssertNil(suppressionDisabled.takePendingFailure())
+            XCTAssertNil(speechAwareBaseline.takePendingFailure())
+        }
     }
 
     func testDisabledSpeechAwarenessMatchesBaseDirectPathSampleForSample() throws {
@@ -614,6 +754,93 @@ final class BufferedSampleRateConverterTests: XCTestCase {
 
         XCTAssertFalse(controller.recoverPendingProcessingFailure(from: processor))
         XCTAssertEqual(resourceStopCount, 1)
+    }
+
+    @available(macOS 14.2, *)
+    @MainActor
+    func testRouteChangeTearsDownAndReconstructsFreshStereoProcessorsAtNewRate() async throws {
+        let model = try RNNoiseModelResource.bundled()
+        let creations = AnalyzerCreationRecorder()
+        let oldFormat = floatFormat(sampleRate: 48_000, channelCount: 2)
+        let oldProcessor = try AudioIOProcessor(
+            inputFormat: oldFormat,
+            outputFormat: oldFormat,
+            settings: neutralSettings(),
+            speechModel: model,
+            stereoSpeechProcessorFactory: { sampleRate in
+                creations.append(sampleRate)
+                return try RNNoiseStereoProcessor(sampleRate: sampleRate, model: model)
+            }
+        )
+        var oldInput = Array(repeating: Float(0.08), count: 480 * 2)
+        var oldOutput = Array(repeating: Float.zero, count: 480 * 2)
+        for _ in 0..<5 {
+            withInterleavedStereoBuffer(samples: &oldInput) { inputList in
+                withMutableInterleavedBuffer(samples: &oldOutput, channelCount: 2) { outputList in
+                    oldProcessor.process(input: inputList, output: outputList)
+                }
+            }
+        }
+        XCTAssertEqual(oldProcessor.directProcessingLatencyFrameCount, 1_440)
+        XCTAssertEqual(creations.values, [48_000, 48_000])
+
+        var stopCount = 0
+        var restartError: Error?
+        var resumedFiniteAudio = false
+        let restarted = expectation(description: "route restarted")
+        let controller = AudioCaptureController(
+            installSystemObservers: false,
+            initiallyRunning: true,
+            stopResourcesDidRun: { stopCount += 1 },
+            startPipelineOverride: {
+                do {
+                    let newFormat = self.floatFormat(sampleRate: 16_000, channelCount: 2)
+                    let newProcessor = try AudioIOProcessor(
+                        inputFormat: newFormat,
+                        outputFormat: newFormat,
+                        settings: self.neutralSettings(),
+                        speechModel: model,
+                        stereoSpeechProcessorFactory: { sampleRate in
+                            creations.append(sampleRate)
+                            return try RNNoiseStereoProcessor(
+                                sampleRate: sampleRate,
+                                model: model
+                            )
+                        }
+                    )
+                    XCTAssertEqual(newProcessor.directProcessingLatencyFrameCount, 528)
+                    var input = Array(repeating: Float(0.08), count: 160 * 2)
+                    var output = Array(repeating: Float.zero, count: 160 * 2)
+                    var accumulatedOutput: [Float] = []
+                    for _ in 0..<6 {
+                        self.withInterleavedStereoBuffer(samples: &input) { inputList in
+                            self.withMutableInterleavedBuffer(
+                                samples: &output,
+                                channelCount: 2
+                            ) { outputList in
+                                newProcessor.process(input: inputList, output: outputList)
+                            }
+                        }
+                        accumulatedOutput.append(contentsOf: output)
+                    }
+                    resumedFiniteAudio = accumulatedOutput.allSatisfy(\.isFinite)
+                        && accumulatedOutput.contains { abs($0) > 0.000_001 }
+                        && newProcessor.takePendingFailure() == nil
+                } catch {
+                    restartError = error
+                }
+                restarted.fulfill()
+            },
+            routeRecoveryDelayNanoseconds: 0
+        )
+
+        controller._testOnlyHandleOutputRouteChange()
+        await fulfillment(of: [restarted], timeout: 2)
+
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertNil(restartError)
+        XCTAssertTrue(resumedFiniteAudio)
+        XCTAssertEqual(creations.values, [48_000, 48_000, 16_000, 16_000])
     }
 
     func testRealSpeechAnalysisRunsOnBothConvertedRateDirections() throws {
