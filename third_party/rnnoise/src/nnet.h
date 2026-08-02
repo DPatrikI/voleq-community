@@ -89,13 +89,17 @@ typedef struct {
 #define linear_init rnn_linear_init
 #define conv2d_init rnn_conv2d_init
 #define compute_generic_dense rnn_compute_generic_dense
+#define compute_generic_dense_pair rnn_compute_generic_dense_pair
 #define compute_generic_gru rnn_compute_generic_gru
+#define compute_generic_gru_pair rnn_compute_generic_gru_pair
 #define compute_generic_conv1d rnn_compute_generic_conv1d
+#define compute_generic_conv1d_pair rnn_compute_generic_conv1d_pair
 #define compute_glu rnn_compute_glu
 
 #define parse_weights rnn_parse_weights
 
 #define compute_linear_c rnn_compute_linear_c
+#define compute_linear_pair_c rnn_compute_linear_pair_c
 #define compute_activation_c rnn_compute_activation_c
 #define compute_conv2d_c rnn_compute_conv2d_c
 #define compute_linear_sse4_1 rnn_compute_linear_sse4_1
@@ -107,8 +111,15 @@ typedef struct {
 
 
 void compute_generic_dense(const LinearLayer *layer, float *output, const float *input, int activation, int arch);
+void compute_generic_dense_pair(const LinearLayer *layer, float *output0, const float *input0,
+      float *output1, const float *input1, int activation, int arch);
 void compute_generic_gru(const LinearLayer *input_weights, const LinearLayer *recurrent_weights, float *state, const float *in, int arch);
+void compute_generic_gru_pair(const LinearLayer *input_weights, const LinearLayer *recurrent_weights,
+  float *state0, const float *in0, float *state1, const float *in1, int arch);
 void compute_generic_conv1d(const LinearLayer *layer, float *output, float *mem, const float *input, int input_size, int activation, int arch);
+void compute_generic_conv1d_pair(const LinearLayer *layer, float *output0, float *mem0,
+      const float *input0, float *output1, float *mem1, const float *input1,
+      int input_size, int activation, int arch);
 void compute_glu(const LinearLayer *layer, float *output, const float *input, int arch);
 
 
@@ -137,6 +148,7 @@ int conv2d_init(Conv2dLayer *layer, const WeightArray *arrays,
 
 
 void compute_linear_c(const LinearLayer *linear, float *out, const float *in);
+void compute_linear_pair_c(const LinearLayer *linear, float *out0, const float *in0, float *out1, const float *in1);
 void compute_activation_c(float *output, const float *input, int N, int activation);
 void compute_conv2d_c(const Conv2dLayer *conv, float *out, float *mem, const float *in, int height, int hstride, int activation);
 

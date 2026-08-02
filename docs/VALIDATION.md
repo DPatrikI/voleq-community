@@ -129,19 +129,22 @@ was split between the direct output clock and converted input clock.
 
 ## Mild noise suppression
 
-Branch: `feat/mild-noise-suppression`
+Branch: `perf/rnnoise-cpu`
 
-Automated status: 117 Swift tests pass on 2026-08-02, including authorization,
+Automated status: 119 Swift tests pass on 2026-08-02, including authorization,
 right-only, anti-phase, reset, allocation, 30 ms latency, real-model marker
 alignment, noise reduction, speech projection, stereo balance, and clean-speech
-transparency. Owner listening passed on 2026-08-02. The CPU gate still fails, so
-release acceptance remains pending.
+transparency. Five final CPU runs pass the unchanged 5% gate. Owner listening of
+the optimized build passed on 2026-08-02 across MacBook speakers, Sennheiser HDB
+630, and Apple AirPods Pro 2. The documented soak remains pending, so release
+acceptance remains pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 117 passed |
+| Developer environment checks / Swift tests | 5 / 119 passed |
 | Separate suppression toggle | Off matches the accepted mono speech-aware path sample-for-sample on direct and two-way converted routes, keeps speech decisions active, applies no wet audio, uses input-rate content analysis on converted paths, and restores 20 ms latency |
 | Shared immutable model and independent L/R RNNoise state | Passed |
+| Ordered-float equivalence | Accepted snapshot remains exact; a 1,000-block stereo/right-only/anti-phase differential stream is bit-exact for events, matching-channel power, probability, SNR metadata, and every L/R wet sample in debug and release-optimized builds, including probability within 0.00038 of an activity boundary |
 | Max-channel probability with matching channel power drives linked decisions | Passed against two independent mono states |
 | 18 / 21 / 24 dB SNR taper | 50% / 25% / 0% wet |
 | Wet transition timing | 30 ms fade in / 100 ms fade out; bounded per-sample slope |
@@ -157,7 +160,7 @@ release acceptance remains pending.
 | Existing lookahead, limiter, downward compression, stereo linking, converted routes, 48→16 kHz call mode, cadence, and content-analysis rates | Passed |
 | Strict-concurrency build with warnings as errors | Passed |
 | Independent RNNoise wet alignment review | Finding fixed: main reconstruction is tagged `k - 2`; exact source-block markers and zero-lag seeded broadband correlation pass at all supported rates |
-| 48 kHz stereo release benchmark | **Failed target:** 15.60% of one core; target ≤5% |
+| 48 kHz stereo release benchmark | **Passed target:** five post-review recorded runs at 4.33% / 4.37% / 4.35% / 4.35% / 4.34% of one core; every run ≤5% |
 | Release app, ad-hoc signature, property list, and patch whitespace | Passed |
 
 The implementation's reported DSP latency includes measured Speex input and
@@ -176,23 +179,64 @@ both initial blocks as warm-up, tags wet output two blocks back, and compares SN
 against the matching dry analysis block. The owner authorized 30 ms at 48 kHz
 on 2026-07-31. Real-model source-block marker tests pass after the correction.
 
-The release benchmark is warmed after reset, release-mode, 48 kHz stereo, and
-measures the DSP processing thread's CPU time divided by represented audio
-duration over 60 seconds. It does not claim to include Core Audio buffer
-traversal or the slower content-analysis queue.
-It ran on a MacBookPro18,3 with macOS 26.5.2 and Swift 6.3.3. The 15.60% result is
-above the required 5% gate and is intentionally recorded as a failure.
+### CPU benchmark and profiling evidence
 
-### Physical listening gate
+The canonical benchmark is warmed after reset, release-mode, 48 kHz stereo, and
+measures the complete `DynamicsProcessor` thread CPU time divided by 60 seconds
+of represented audio. Release Swift uses `-O` with whole-module optimization;
+the RNNoise C target uses the release C optimizer and the Apple-Silicon float
+path uses NEON/FMA. Two independent RNNoise states process every 480 samples.
+The timed region excludes building, wall-clock scheduling, Core Audio traversal,
+and the slower content-analysis queue. Runtime guards reject debug execution,
+unexpected 480/1,440-frame workload latency, processing failure, non-finite
+measurement, a silent/non-executing output path, or anything other than exactly
+6,000 successful paired RNNoise frames. The fixture, duration, and 5% target are
+unchanged.
 
-The owner reported a passing physical test for mild suppression on 2026-08-02.
-The exact output device, microphone mode, and complete scenario matrix were not
-recorded, so this pass is not presented as per-device compatibility evidence.
-The earlier accepted device matrix validates leveling and routing only. Pending
-structured checks cover clean speech, speech with static, quiet-to-loud
-transitions, microphone bumps, and instrumental music on MacBook speakers,
-Sennheiser HDB 630, and AirPods Pro 2; each headset must be tested in regular
-playback and microphone-active mode.
+Baseline evidence on `acd4690`, after one discarded 15.01% warm-up, was 14.95%,
+14.87%, 14.94%, 14.92%, and 14.85%. Median was 14.92%, minimum 14.85%, maximum
+14.95%, and spread 0.10 percentage point (about 0.67% of the median), so no
+thermal-variation extension was needed.
+
+`sample` and Instruments Time Profiler both placed the dominant cost in the
+scalar fallback used by RNNoise's sparse float GRU matrices: 5,492 of the
+baseline `sample` top-of-stack samples were in `rnn_compute_linear_c`. FFT,
+pitch search, feature extraction, Swift/C calls, copying/FIFO work, dynamics,
+and resampling were individually much smaller. The callback-allocation harness
+also represented buffer integration and later passed with zero allocations.
+
+The retained changes replace that scalar sparse kernel with NEON, pair the two
+float inference passes so sparse GRU and dense/conv weights are loaded once,
+interleave independent output rows without changing any output's accumulation
+order, pair the high-pass traversal, fuse stereo power traversal, rotate
+already-allocated history buffers, prepare direct 48 kHz wet blocks without a
+redundant FIFO round trip, and use explicitly preallocated callback-owned DSP
+and delay buffers to avoid Swift copy-on-write/exclusivity overhead. An experiment
+using RNNoise's bundled int8 weights reached 4.13% but was rejected: comparison
+showed up to 0.706 probability, 13.5 dB SNR, and 0.0413 normalized-sample drift.
+No quantized weights remain in the optimized path.
+
+Final post-review evidence, after one discarded 4.38% warm-up, was 4.33%, 4.37%,
+4.35%, 4.35%, and 4.34% (2.601 / 2.621 / 2.608 / 2.610 / 2.605 thread-CPU
+seconds). Median was 4.35%, minimum 4.33%, maximum 4.37%, and spread 0.04
+percentage point (about 0.92% of the median). Every recorded run passes the
+unchanged 5% gate; the median improvement from baseline is about 70.8%. In the final `sample` run,
+the paired float matrix kernel remained dominant (1,198 top-of-stack samples),
+followed by pitch correlation (85), FFT (73), pitch search (36), and pitch
+de-doubling (24). Swift TLS bookkeeping fell to 18 samples, with dynamics,
+copying, and wrapper work smaller still. The profiled benchmark itself measured
+4.51%; it is profiling evidence and is kept separate from the canonical gate set.
+
+### Physical listening evidence
+
+The owner accepted the optimized build on 2026-08-02 using MacBook speakers,
+Sennheiser HDB 630, and Apple AirPods Pro 2. The completed scenario matrix covered
+clean and noisy speech, quiet/loud transitions, microphone bumps, instrumental
+music, stereo image, suppression-toggle comparison, clicks/dropouts, and route
+restoration. This is physical listening evidence for the optimized RNNoise path;
+it is kept separate from the automated equivalence and CPU results above and
+does not claim coverage of untested devices, meeting applications, or long-run
+stability.
 
 ### Thirty-minute soak procedure
 

@@ -35,6 +35,17 @@ estimated SNR, decision latency, and denoised coverage. The highest channel
 probability and that same channel's source power form one linked decision. It
 uses `CRNNoise` and the minimal `CSpeexResampler` target.
 
+On Apple Silicon, the internal RNNoise adapter evaluates the two states through
+a paired float kernel covering sparse GRU and dense/conv layers. It shares
+immutable model-weight loads only and interleaves independent output rows while
+retaining each output's accepted accumulation order; both
+channels keep independent feature extraction, recurrent state, probability,
+gain, synthesis, and history. The direct 48 kHz path prepares aligned pending
+blocks without a redundant FIFO round trip, while converted paths retain their
+bounded FIFO. O(1) analysis-history rotation and callback-owned preallocated
+buffers remove redundant traversal and Swift copy-on-write bookkeeping without
+changing public APIs, source tags, converted FIFO bounds, or failure behavior.
+
 ### `VolEqMacAudio`
 
 The macOS adapter. It owns Core Audio process discovery, process taps, aggregate-device lifecycle, audio-buffer adaptation, and output-device interaction. Apple-specific identifiers stay here.

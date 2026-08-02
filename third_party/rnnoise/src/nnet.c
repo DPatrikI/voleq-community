@@ -60,6 +60,14 @@ void compute_generic_dense(const LinearLayer *layer, float *output, const float 
    compute_activation(output, output, layer->nb_outputs, activation, arch);
 }
 
+void compute_generic_dense_pair(const LinearLayer *layer, float *output0, const float *input0,
+      float *output1, const float *input1, int activation, int arch)
+{
+   compute_linear_pair_c(layer, output0, input0, output1, input1);
+   compute_activation(output0, output0, layer->nb_outputs, activation, arch);
+   compute_activation(output1, output1, layer->nb_outputs, activation, arch);
+}
+
 #define MAX_RNN_NEURONS_ALL 1024
 
 void compute_generic_gru(const LinearLayer *input_weights, const LinearLayer *recurrent_weights, float *state, const float *in, int arch)
@@ -93,6 +101,48 @@ void compute_generic_gru(const LinearLayer *input_weights, const LinearLayer *re
      state[i] = h[i];
 }
 
+static void finish_generic_gru(const LinearLayer *recurrent_weights, float *state,
+      float *zrh, float *recur, int arch)
+{
+  int i;
+  int N;
+  float *z;
+  float *r;
+  float *h;
+  N = recurrent_weights->nb_inputs;
+  z = zrh;
+  r = &zrh[N];
+  h = &zrh[2*N];
+  for (i=0;i<2*N;i++)
+     zrh[i] += recur[i];
+  compute_activation(zrh, zrh, 2*N, ACTIVATION_SIGMOID, arch);
+  for (i=0;i<N;i++)
+     h[i] += recur[2*N+i]*r[i];
+  compute_activation(h, h, N, ACTIVATION_TANH, arch);
+  for (i=0;i<N;i++)
+     h[i] = z[i]*state[i] + (1-z[i])*h[i];
+  for (i=0;i<N;i++)
+     state[i] = h[i];
+}
+
+void compute_generic_gru_pair(const LinearLayer *input_weights, const LinearLayer *recurrent_weights,
+      float *state0, const float *in0, float *state1, const float *in1, int arch)
+{
+  float zrh0[3*MAX_RNN_NEURONS_ALL];
+  float recur0[3*MAX_RNN_NEURONS_ALL];
+  float zrh1[3*MAX_RNN_NEURONS_ALL];
+  float recur1[3*MAX_RNN_NEURONS_ALL];
+  celt_assert(3*recurrent_weights->nb_inputs == recurrent_weights->nb_outputs);
+  celt_assert(input_weights->nb_outputs == recurrent_weights->nb_outputs);
+  celt_assert(recurrent_weights->nb_outputs <= 3*MAX_RNN_NEURONS_ALL);
+  celt_assert(in0 != state0);
+  celt_assert(in1 != state1);
+  compute_linear_pair_c(input_weights, zrh0, in0, zrh1, in1);
+  compute_linear_pair_c(recurrent_weights, recur0, state0, recur1, state1);
+  finish_generic_gru(recurrent_weights, state0, zrh0, recur0, arch);
+  finish_generic_gru(recurrent_weights, state1, zrh1, recur1, arch);
+}
+
 void compute_glu(const LinearLayer *layer, float *output, const float *input, int arch)
 {
    int i;
@@ -120,4 +170,28 @@ void compute_generic_conv1d(const LinearLayer *layer, float *output, float *mem,
    compute_linear(layer, output, tmp, arch);
    compute_activation(output, output, layer->nb_outputs, activation, arch);
    if (layer->nb_inputs!=input_size) RNN_COPY(mem, &tmp[input_size], layer->nb_inputs-input_size);
+}
+
+void compute_generic_conv1d_pair(const LinearLayer *layer, float *output0, float *mem0,
+      const float *input0, float *output1, float *mem1, const float *input1,
+      int input_size, int activation, int arch)
+{
+   float tmp0[MAX_CONV_INPUTS_ALL];
+   float tmp1[MAX_CONV_INPUTS_ALL];
+   celt_assert(input0 != output0);
+   celt_assert(input1 != output1);
+   celt_assert(layer->nb_inputs <= MAX_CONV_INPUTS_ALL);
+   if (layer->nb_inputs!=input_size) {
+      RNN_COPY(tmp0, mem0, layer->nb_inputs-input_size);
+      RNN_COPY(tmp1, mem1, layer->nb_inputs-input_size);
+   }
+   RNN_COPY(&tmp0[layer->nb_inputs-input_size], input0, input_size);
+   RNN_COPY(&tmp1[layer->nb_inputs-input_size], input1, input_size);
+   compute_linear_pair_c(layer, output0, tmp0, output1, tmp1);
+   compute_activation(output0, output0, layer->nb_outputs, activation, arch);
+   compute_activation(output1, output1, layer->nb_outputs, activation, arch);
+   if (layer->nb_inputs!=input_size) {
+      RNN_COPY(mem0, &tmp0[input_size], layer->nb_inputs-input_size);
+      RNN_COPY(mem1, &tmp1[input_size], layer->nb_inputs-input_size);
+   }
 }

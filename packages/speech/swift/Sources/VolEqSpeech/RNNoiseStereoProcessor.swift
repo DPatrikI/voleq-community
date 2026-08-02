@@ -20,6 +20,7 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
     private static let insignificantPower: Double = 1e-12
 
     private let modelResource: RNNoiseModelResource
+    private let usesOptimizedPairedInference: Bool
     private let leftState: OpaquePointer
     private let rightState: OpaquePointer
     private var inputResampler: OpaquePointer?
@@ -27,20 +28,20 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
 
     private var singleInputFrame = [Float](repeating: 0, count: 2)
     private var inputResamplerOutput = [Float](repeating: 0, count: 32)
-    private var analysisLeft = [Float](repeating: 0, count: 480)
-    private var analysisRight = [Float](repeating: 0, count: 480)
+    private var analysisLeft: UnsafeMutableBufferPointer<Float>
+    private var analysisRight: UnsafeMutableBufferPointer<Float>
     private var denoisedLeft48K = [Float](repeating: 0, count: 480)
     private var denoisedRight48K = [Float](repeating: 0, count: 480)
-    private var previousAnalysisLeft = [Float](repeating: 0, count: 480)
-    private var previousAnalysisRight = [Float](repeating: 0, count: 480)
-    private var olderAnalysisLeft = [Float](repeating: 0, count: 480)
-    private var olderAnalysisRight = [Float](repeating: 0, count: 480)
+    private var previousAnalysisLeft: UnsafeMutableBufferPointer<Float>
+    private var previousAnalysisRight: UnsafeMutableBufferPointer<Float>
+    private var olderAnalysisLeft: UnsafeMutableBufferPointer<Float>
+    private var olderAnalysisRight: UnsafeMutableBufferPointer<Float>
     private var interleavedDenoised48K = [Float](repeating: 0, count: 960)
     private var outputResamplerScratch: [Float]
 
-    private var dryLeftHistory: [Float]
-    private var dryRightHistory: [Float]
-    private var dryHistoryTags: [Int64]
+    private let dryLeftHistory: UnsafeMutableBufferPointer<Float>
+    private let dryRightHistory: UnsafeMutableBufferPointer<Float>
+    private let dryHistoryTags: UnsafeMutableBufferPointer<Int64>
     private var decisionHistoryStart: [Int64]
     private var decisionHistoryProbability: [Float]
     private var decisionHistoryPower: [Float]
@@ -61,11 +62,20 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
 
     private var analysisWriteCount = 0
     private var completedAnalysisBlockCount = 0
+    private var optimizedInferencePairCount = 0
     private var sourceFrameIndex: Int64 = -1
     private var wetOutputFrameIndex: Int64 = -1
     private var failed = false
 
-    public init(sampleRate: Double, model: RNNoiseModelResource) throws {
+    public convenience init(sampleRate: Double, model: RNNoiseModelResource) throws {
+        try self.init(sampleRate: sampleRate, model: model, usesOptimizedPairedInference: true)
+    }
+
+    init(
+        sampleRate: Double,
+        model: RNNoiseModelResource,
+        usesOptimizedPairedInference: Bool
+    ) throws {
         guard sampleRate.isFinite,
               sampleRate >= 8_000,
               sampleRate <= 192_000,
@@ -131,6 +141,7 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
         decisionLatencyFrameCount = blockFrameCount + inputLatency
         processingLatencyFrameCount = blockFrameCount * 3 + inputLatency + outputLatency
         modelResource = model
+        self.usesOptimizedPairedInference = usesOptimizedPairedInference
         self.leftState = leftState
         self.rightState = rightState
         inputResampler = preparedInputResampler
@@ -140,10 +151,16 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
             repeating: 0,
             count: max(blockFrameCount * 4, Self.analysisFrameCount * 2)
         )
+        analysisLeft = Self.allocateBuffer(repeating: 0, count: Self.analysisFrameCount)
+        analysisRight = Self.allocateBuffer(repeating: 0, count: Self.analysisFrameCount)
+        previousAnalysisLeft = Self.allocateBuffer(repeating: 0, count: Self.analysisFrameCount)
+        previousAnalysisRight = Self.allocateBuffer(repeating: 0, count: Self.analysisFrameCount)
+        olderAnalysisLeft = Self.allocateBuffer(repeating: 0, count: Self.analysisFrameCount)
+        olderAnalysisRight = Self.allocateBuffer(repeating: 0, count: Self.analysisFrameCount)
         let historyCapacity = max(processingLatencyFrameCount + blockFrameCount * 3, 1)
-        dryLeftHistory = [Float](repeating: 0, count: historyCapacity)
-        dryRightHistory = [Float](repeating: 0, count: historyCapacity)
-        dryHistoryTags = [Int64](repeating: -1, count: historyCapacity)
+        dryLeftHistory = Self.allocateBuffer(repeating: 0, count: historyCapacity)
+        dryRightHistory = Self.allocateBuffer(repeating: 0, count: historyCapacity)
+        dryHistoryTags = Self.allocateBuffer(repeating: -1, count: historyCapacity)
         decisionHistoryStart = [Int64](repeating: -1, count: 8)
         decisionHistoryProbability = [Float](repeating: 0, count: 8)
         decisionHistoryPower = [Float](repeating: 0, count: 8)
@@ -161,6 +178,18 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
         if let outputResampler { voleq_speex_resampler_destroy(outputResampler) }
         rnnoise_destroy(rightState)
         rnnoise_destroy(leftState)
+        dryLeftHistory.deinitialize()
+        dryLeftHistory.baseAddress?.deallocate()
+        dryRightHistory.deinitialize()
+        dryRightHistory.baseAddress?.deallocate()
+        dryHistoryTags.deinitialize()
+        dryHistoryTags.baseAddress?.deallocate()
+        Self.deallocateBuffer(analysisLeft)
+        Self.deallocateBuffer(analysisRight)
+        Self.deallocateBuffer(previousAnalysisLeft)
+        Self.deallocateBuffer(previousAnalysisRight)
+        Self.deallocateBuffer(olderAnalysisLeft)
+        Self.deallocateBuffer(olderAnalysisRight)
     }
 
     public func processStereoFrame(left: Float, right: Float) -> SpeechAnalysisEvent {
@@ -168,7 +197,7 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
             failed = true
             return .failed
         }
-        guard drainWetFIFO() else { return fail() }
+        if wetFIFOCount > 0, !drainWetFIFO() { return fail() }
         sourceFrameIndex += 1
         storeDry(left: left, right: right, at: sourceFrameIndex)
 
@@ -207,6 +236,8 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
 
     public var pendingDenoisedBlock: DenoisedSpeechBlock? { pendingMetadata }
 
+    package var completedOptimizedInferencePairCount: Int { optimizedInferencePairCount }
+
     public func denoisedSample(frame: Int, channel: Int) -> Float {
         guard pendingMetadata != nil, pendingLeft.indices.contains(frame) else { return 0 }
         return channel == 0 ? pendingLeft[frame] : pendingRight[frame]
@@ -230,19 +261,20 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
         pendingStartFrameIndex = 0
         pendingMetadata = nil
         completedAnalysisBlockCount = 0
+        optimizedInferencePairCount = 0
         failed = !statesReset || !rebuiltResamplers
-        clear(&analysisLeft)
-        clear(&analysisRight)
+        clear(analysisLeft)
+        clear(analysisRight)
         clear(&denoisedLeft48K)
         clear(&denoisedRight48K)
-        clear(&previousAnalysisLeft)
-        clear(&previousAnalysisRight)
-        clear(&olderAnalysisLeft)
-        clear(&olderAnalysisRight)
+        clear(previousAnalysisLeft)
+        clear(previousAnalysisRight)
+        clear(olderAnalysisLeft)
+        clear(olderAnalysisRight)
         clear(&interleavedDenoised48K)
         clear(&outputResamplerScratch)
-        clear(&dryLeftHistory)
-        clear(&dryRightHistory)
+        for index in dryLeftHistory.indices { dryLeftHistory[index] = 0 }
+        for index in dryRightHistory.indices { dryRightHistory[index] = 0 }
         for index in dryHistoryTags.indices { dryHistoryTags[index] = -1 }
         for index in decisionHistoryStart.indices { decisionHistoryStart[index] = -1 }
         for index in decisionHistorySNR.indices { decisionHistorySNR[index] = .nan }
@@ -295,20 +327,34 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
         guard analysisWriteCount == Self.analysisFrameCount else { return .pending }
         analysisWriteCount = 0
 
-        let leftProbability = analysisLeft.withUnsafeBufferPointer { input in
-            denoisedLeft48K.withUnsafeMutableBufferPointer { output in
-                rnnoise_process_frame(leftState, output.baseAddress, input.baseAddress)
+        let leftProbability: Float
+        var rightProbability: Float
+        if usesOptimizedPairedInference {
+            rightProbability = 0
+            leftProbability = denoisedLeft48K.withUnsafeMutableBufferPointer { leftOutput in
+                denoisedRight48K.withUnsafeMutableBufferPointer { rightOutput in
+                    rnnoise_process_frame_pair(
+                        leftState,
+                        leftOutput.baseAddress,
+                        analysisLeft.baseAddress,
+                        rightState,
+                        rightOutput.baseAddress,
+                        analysisRight.baseAddress,
+                        &rightProbability
+                    )
+                }
             }
-        }
-        let rightProbability = analysisRight.withUnsafeBufferPointer { input in
-            denoisedRight48K.withUnsafeMutableBufferPointer { output in
-                rnnoise_process_frame(rightState, output.baseAddress, input.baseAddress)
+        } else {
+            leftProbability = denoisedLeft48K.withUnsafeMutableBufferPointer { output in
+                rnnoise_process_frame(leftState, output.baseAddress, analysisLeft.baseAddress)
+            }
+            rightProbability = denoisedRight48K.withUnsafeMutableBufferPointer { output in
+                rnnoise_process_frame(rightState, output.baseAddress, analysisRight.baseAddress)
             }
         }
         guard leftProbability.isFinite,
-              rightProbability.isFinite,
-              denoisedLeft48K.allSatisfy(\.isFinite),
-              denoisedRight48K.allSatisfy(\.isFinite) else { return fail() }
+              rightProbability.isFinite else { return fail() }
+        if usesOptimizedPairedInference { optimizedInferencePairCount += 1 }
 
         let approximateDecisionStart = sourceFrameIndex + 1
             - Int64(decisionLatencyFrameCount)
@@ -325,8 +371,7 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
             // source-time decision window exists. Its denoised output is warm-up only.
             return appendDenoisedOutputWithoutDecision()
         }
-        guard let leftPower = sourcePower(channel: 0, start: decisionStart),
-              let rightPower = sourcePower(channel: 1, start: decisionStart) else {
+        guard let (leftPower, rightPower) = sourcePowers(start: decisionStart) else {
             return fail()
         }
         let useLeft = leftProbability >= rightProbability
@@ -354,21 +399,26 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
     }
 
     private func advanceAnalysisHistory() {
-        for index in 0..<Self.analysisFrameCount {
-            olderAnalysisLeft[index] = previousAnalysisLeft[index]
-            olderAnalysisRight[index] = previousAnalysisRight[index]
-            previousAnalysisLeft[index] = analysisLeft[index]
-            previousAnalysisRight[index] = analysisRight[index]
-        }
+        let recycledLeft = olderAnalysisLeft
+        olderAnalysisLeft = previousAnalysisLeft
+        previousAnalysisLeft = analysisLeft
+        analysisLeft = recycledLeft
+        let recycledRight = olderAnalysisRight
+        olderAnalysisRight = previousAnalysisRight
+        previousAnalysisRight = analysisRight
+        analysisRight = recycledRight
         completedAnalysisBlockCount += 1
     }
 
     private func appendDenoisedOutput() -> Bool {
-        for frame in 0..<Self.analysisFrameCount {
-            interleavedDenoised48K[frame * 2] = denoisedLeft48K[frame] / 32_768
-            interleavedDenoised48K[frame * 2 + 1] = denoisedRight48K[frame] / 32_768
-        }
         if let outputResampler {
+            for frame in 0..<Self.analysisFrameCount {
+                let left = denoisedLeft48K[frame] / 32_768
+                let right = denoisedRight48K[frame] / 32_768
+                guard left.isFinite, right.isFinite else { return false }
+                interleavedDenoised48K[frame * 2] = left
+                interleavedDenoised48K[frame * 2 + 1] = right
+            }
             var inputLength = UInt32(Self.analysisFrameCount)
             var outputLength = UInt32(outputResamplerScratch.count / 2)
             let status = interleavedDenoised48K.withUnsafeBufferPointer { input in
@@ -390,14 +440,60 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
                 ) else { return false }
             }
         } else {
-            for frame in 0..<Self.analysisFrameCount {
-                guard enqueueWetOutput(
-                    left: interleavedDenoised48K[frame * 2],
-                    right: interleavedDenoised48K[frame * 2 + 1]
-                ) else { return false }
-            }
+            return prepareDenoisedOutput48KBlock()
         }
         return drainWetFIFO()
+    }
+
+    private func prepareDenoisedOutput48KBlock() -> Bool {
+        let outputStart = wetOutputFrameIndex + 1
+        wetOutputFrameIndex += Int64(Self.analysisFrameCount)
+        let sourceOffset = Int64(sourceBlockFrameCount * 2)
+        let sourceStart = outputStart - sourceOffset
+        guard sourceStart >= 0 else {
+            for frame in 0..<Self.analysisFrameCount {
+                guard denoisedLeft48K[frame].isFinite,
+                      denoisedRight48K[frame].isFinite else { return false }
+            }
+            return true
+        }
+        let blockSize = Int64(sourceBlockFrameCount)
+        guard sourceStart % blockSize == 0,
+              pendingMetadata == nil,
+              let decision = decision(at: sourceStart) else { return false }
+        let dryCapacity = dryHistoryTags.count
+        let succeeded = denoisedLeft48K.withUnsafeBufferPointer { left in
+            denoisedRight48K.withUnsafeBufferPointer { right in
+                pendingLeft.withUnsafeMutableBufferPointer { outputLeft in
+                    pendingRight.withUnsafeMutableBufferPointer { outputRight in
+                        for frame in 0..<sourceBlockFrameCount {
+                            let sourceIndex = sourceStart + Int64(frame)
+                            let drySlot = Int(sourceIndex % Int64(dryCapacity))
+                            guard dryHistoryTags[drySlot] == sourceIndex else { return false }
+                            let scaledLeft = left[frame] / 32_768
+                            let scaledRight = right[frame] / 32_768
+                            guard scaledLeft.isFinite, scaledRight.isFinite else {
+                                return false
+                            }
+                            outputLeft[frame] = scaledLeft
+                            outputRight[frame] = scaledRight
+                        }
+                        return true
+                    }
+                }
+            }
+        }
+        guard succeeded else { return false }
+        pendingStartFrameIndex = sourceStart
+        pendingWriteCount = sourceBlockFrameCount
+        pendingMetadata = DenoisedSpeechBlock(
+            sourceStartFrameIndex: sourceStart,
+            sourceFrameCount: sourceBlockFrameCount,
+            speechProbability: decision.probability,
+            sourcePower: decision.power,
+            estimatedSNRDB: decision.snrDB
+        )
+        return true
     }
 
     private func enqueueWetOutput(left: Float, right: Float) -> Bool {
@@ -422,21 +518,47 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
         let blockSize = Int64(sourceBlockFrameCount)
         let blockStart = (firstSourceIndex / blockSize) * blockSize
         guard let decision = decision(at: blockStart) else { return false }
-        pendingStartFrameIndex = firstSourceIndex
-        pendingWriteCount = 0
-        while wetFIFOCount > 0, pendingWriteCount < sourceBlockFrameCount {
-            let left = wetFIFOLeft[wetFIFOReadIndex]
-            let right = wetFIFORight[wetFIFOReadIndex]
-            let sourceIndex = wetFIFOTag[wetFIFOReadIndex]
-            guard (sourceIndex / blockSize) * blockSize == blockStart else { break }
-            wetFIFOReadIndex = (wetFIFOReadIndex + 1) % wetFIFOLeft.count
-            wetFIFOCount -= 1
-            guard sourceIndex == pendingStartFrameIndex + Int64(pendingWriteCount),
-                  dryFrame(at: sourceIndex) != nil else { return false }
-            pendingLeft[pendingWriteCount] = left
-            pendingRight[pendingWriteCount] = right
-            pendingWriteCount += 1
+        var readIndex = wetFIFOReadIndex
+        var fifoCount = wetFIFOCount
+        var writeCount = 0
+        let fifoCapacity = wetFIFOLeft.count
+        let dryCapacity = dryHistoryTags.count
+        let succeeded = wetFIFOLeft.withUnsafeBufferPointer { fifoLeft in
+            wetFIFORight.withUnsafeBufferPointer { fifoRight in
+                wetFIFOTag.withUnsafeBufferPointer { fifoTag in
+                    pendingLeft.withUnsafeMutableBufferPointer { outputLeft in
+                        pendingRight.withUnsafeMutableBufferPointer { outputRight in
+                            while fifoCount > 0, writeCount < sourceBlockFrameCount {
+                                let sourceIndex = fifoTag[readIndex]
+                                guard (sourceIndex / blockSize) * blockSize == blockStart else {
+                                    break
+                                }
+                                guard sourceIndex == firstSourceIndex + Int64(writeCount) else {
+                                    return false
+                                }
+                                guard sourceIndex >= 0 else { return false }
+                                let drySlot = Int(sourceIndex % Int64(dryCapacity))
+                                guard dryHistoryTags[drySlot] == sourceIndex else {
+                                    return false
+                                }
+                                outputLeft[writeCount] = fifoLeft[readIndex]
+                                outputRight[writeCount] = fifoRight[readIndex]
+                                writeCount += 1
+                                readIndex += 1
+                                if readIndex == fifoCapacity { readIndex = 0 }
+                                fifoCount -= 1
+                            }
+                            return true
+                        }
+                    }
+                }
+            }
         }
+        guard succeeded else { return false }
+        pendingStartFrameIndex = firstSourceIndex
+        pendingWriteCount = writeCount
+        wetFIFOReadIndex = readIndex
+        wetFIFOCount = fifoCount
         pendingMetadata = DenoisedSpeechBlock(
             sourceStartFrameIndex: pendingStartFrameIndex,
             sourceFrameCount: pendingWriteCount,
@@ -461,16 +583,20 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
         return (dryLeftHistory[slot], dryRightHistory[slot])
     }
 
-    private func sourcePower(channel: Int, start: Int64) -> Float? {
-        var sum: Double = 0
+    private func sourcePowers(start: Int64) -> (left: Float, right: Float)? {
+        var leftSum: Double = 0
+        var rightSum: Double = 0
         for offset in 0..<sourceBlockFrameCount {
             guard let dry = dryFrame(at: start + Int64(offset)) else { return nil }
-            let sample = channel == 0 ? dry.left : dry.right
-            let doubleSample = Double(sample)
-            sum += doubleSample * doubleSample
+            let left = Double(dry.left)
+            let right = Double(dry.right)
+            leftSum += left * left
+            rightSum += right * right
         }
-        let average = Float(sum / Double(sourceBlockFrameCount))
-        return average.isFinite ? average : nil
+        let count = Double(sourceBlockFrameCount)
+        let left = Float(leftSum / count)
+        let right = Float(rightSum / count)
+        return left.isFinite && right.isFinite ? (left, right) : nil
     }
 
     private func storeDecision(_ result: SpeechAnalysisResult, start: Int64) {
@@ -528,5 +654,25 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
 
     private func clear(_ values: inout [Float]) {
         for index in values.indices { values[index] = 0 }
+    }
+
+    private func clear(_ values: UnsafeMutableBufferPointer<Float>) {
+        for index in values.indices { values[index] = 0 }
+    }
+
+    private static func allocateBuffer<Element>(
+        repeating value: Element,
+        count: Int
+    ) -> UnsafeMutableBufferPointer<Element> {
+        let storage = UnsafeMutablePointer<Element>.allocate(capacity: count)
+        storage.initialize(repeating: value, count: count)
+        return UnsafeMutableBufferPointer(start: storage, count: count)
+    }
+
+    private static func deallocateBuffer<Element>(
+        _ buffer: UnsafeMutableBufferPointer<Element>
+    ) {
+        buffer.deinitialize()
+        buffer.baseAddress?.deallocate()
     }
 }

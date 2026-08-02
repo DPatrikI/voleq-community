@@ -58,3 +58,28 @@ void compute_rnn(const RNNoise *model, RNNState *rnn, float *gains, float *vad, 
   /*for (int i=0;i<22;i++) printf("%f ", gains[i]);printf("\n");*/
   /*printf("%f\n", *vad);*/
 }
+
+void compute_rnn_pair(const RNNoise *model, RNNState *rnn0, float *gains0, float *vad0, const float *input0,
+      RNNState *rnn1, float *gains1, float *vad1, const float *input1, int arch) {
+  float tmp0[MAX_NEURONS];
+  float tmp1[MAX_NEURONS];
+  float cat0[CONV2_OUT_SIZE + GRU1_OUT_SIZE + GRU2_OUT_SIZE + GRU3_OUT_SIZE];
+  float cat1[CONV2_OUT_SIZE + GRU1_OUT_SIZE + GRU2_OUT_SIZE + GRU3_OUT_SIZE];
+  compute_generic_conv1d_pair(&model->conv1,
+    tmp0, rnn0->conv1_state, input0, tmp1, rnn1->conv1_state, input1,
+    CONV1_IN_SIZE, ACTIVATION_TANH, arch);
+  compute_generic_conv1d_pair(&model->conv2,
+    cat0, rnn0->conv2_state, tmp0, cat1, rnn1->conv2_state, tmp1,
+    CONV2_IN_SIZE, ACTIVATION_TANH, arch);
+  compute_generic_gru_pair(&model->gru1_input, &model->gru1_recurrent, rnn0->gru1_state, cat0, rnn1->gru1_state, cat1, arch);
+  compute_generic_gru_pair(&model->gru2_input, &model->gru2_recurrent, rnn0->gru2_state, rnn0->gru1_state, rnn1->gru2_state, rnn1->gru1_state, arch);
+  compute_generic_gru_pair(&model->gru3_input, &model->gru3_recurrent, rnn0->gru3_state, rnn0->gru2_state, rnn1->gru3_state, rnn1->gru2_state, arch);
+  RNN_COPY(&cat0[CONV2_OUT_SIZE], rnn0->gru1_state, GRU1_OUT_SIZE);
+  RNN_COPY(&cat0[CONV2_OUT_SIZE+GRU1_OUT_SIZE], rnn0->gru2_state, GRU2_OUT_SIZE);
+  RNN_COPY(&cat0[CONV2_OUT_SIZE+GRU1_OUT_SIZE+GRU2_OUT_SIZE], rnn0->gru3_state, GRU3_OUT_SIZE);
+  RNN_COPY(&cat1[CONV2_OUT_SIZE], rnn1->gru1_state, GRU1_OUT_SIZE);
+  RNN_COPY(&cat1[CONV2_OUT_SIZE+GRU1_OUT_SIZE], rnn1->gru2_state, GRU2_OUT_SIZE);
+  RNN_COPY(&cat1[CONV2_OUT_SIZE+GRU1_OUT_SIZE+GRU2_OUT_SIZE], rnn1->gru3_state, GRU3_OUT_SIZE);
+  compute_generic_dense_pair(&model->dense_out, gains0, cat0, gains1, cat1, ACTIVATION_SIGMOID, arch);
+  compute_generic_dense_pair(&model->vad_dense, vad0, cat0, vad1, cat1, ACTIVATION_SIGMOID, arch);
+}

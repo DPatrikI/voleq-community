@@ -161,6 +161,46 @@ void RTCD_SUF(compute_linear_) (const LinearLayer *linear, float *out, const flo
    }
 }
 
+void RTCD_SUF(compute_linear_pair_) (const LinearLayer *linear, float *out0, const float *in0, float *out1, const float *in1)
+{
+#if defined(HAVE_SPARSE_SGEMV8X4_PAIR) && defined(HAVE_SGEMV_PAIR)
+   int i, M, N;
+   const float *bias;
+   celt_assert(in0 != out0);
+   celt_assert(in1 != out1);
+   bias = linear->bias;
+   M = linear->nb_inputs;
+   N = linear->nb_outputs;
+   if (linear->float_weights != NULL) {
+      if (linear->weights_idx != NULL) {
+         sparse_sgemv8x4_pair(out0, out1, linear->float_weights, linear->weights_idx, N, in0, in1);
+      } else {
+         sgemv_pair(out0, out1, linear->float_weights, N, M, N, in0, in1);
+      }
+      if (bias != NULL) {
+         for (i=0;i<N;i++) out0[i] += bias[i];
+         for (i=0;i<N;i++) out1[i] += bias[i];
+      }
+      if (linear->diag) {
+         celt_assert(3*M == N);
+         for (i=0;i<M;i++) {
+            out0[i] += linear->diag[i]*in0[i];
+            out0[i+M] += linear->diag[i+M]*in0[i];
+            out0[i+2*M] += linear->diag[i+2*M]*in0[i];
+         }
+         for (i=0;i<M;i++) {
+            out1[i] += linear->diag[i]*in1[i];
+            out1[i+M] += linear->diag[i+M]*in1[i];
+            out1[i+2*M] += linear->diag[i+2*M]*in1[i];
+         }
+      }
+      return;
+   }
+#endif
+   RTCD_SUF(compute_linear_)(linear, out0, in0);
+   RTCD_SUF(compute_linear_)(linear, out1, in1);
+}
+
 /* Computes non-padded convolution for input [ ksize1 x in_channels x (len2+ksize2) ],
    kernel [ out_channels x in_channels x ksize1 x ksize2 ],
    storing the output as [ out_channels x len2 ].

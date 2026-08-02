@@ -6,6 +6,13 @@ import XCTest
 final class RNNoiseStereoProcessorTests: XCTestCase {
     private static let model = try! RNNoiseModelResource.bundled()
 
+    private func mixSnapshot(_ value: UInt64, into hash: inout UInt64) {
+        for shift in stride(from: 0, through: 56, by: 8) {
+            hash ^= (value >> UInt64(shift)) & 0xff
+            hash &*= 1_099_511_628_211
+        }
+    }
+
     func testMeasuredLatencyAtSupportedRates() throws {
         let expected = [
             (16_000.0, 24, 24, 528),
@@ -54,32 +61,115 @@ final class RNNoiseStereoProcessorTests: XCTestCase {
     }
 
     func testNonFiniteInputFailsAndResetRecovers() throws {
-        let processor = try RNNoiseStereoProcessor(sampleRate: 48_000, model: Self.model)
-        XCTAssertEqual(processor.processStereoFrame(left: .nan, right: 0), .failed)
-        XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .failed)
-        processor.reset()
-        XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .pending)
+        for rate in [16_000.0, 44_100.0, 48_000.0] {
+            let processor = try RNNoiseStereoProcessor(sampleRate: rate, model: Self.model)
+            XCTAssertEqual(processor.processStereoFrame(left: .nan, right: 0), .failed)
+            XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .failed)
+            processor.reset()
+            XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .pending)
+        }
+    }
+
+    func testOptimizedFloatInferenceIsBitExactAcrossRecurrentDriftHorizon() throws {
+        let accepted = try RNNoiseStereoProcessor(
+            sampleRate: 48_000,
+            model: Self.model,
+            usesOptimizedPairedInference: false
+        )
+        let optimized = try RNNoiseStereoProcessor(sampleRate: 48_000, model: Self.model)
+        var randomState: UInt32 = 0xBB67_AE85
+        var minimumActivityBoundaryDistance: Float = 1
+        let comparisonBlockCount = 1_000
+        var resultCount = 0
+        var denoisedBlockCount = 0
+
+        for frame in 0..<(accepted.sourceBlockFrameCount * comparisonBlockCount) {
+            randomState = randomState &* 1_664_525 &+ 1_013_904_223
+            let noiseLeft = Float(Int32(bitPattern: randomState)) / Float(Int32.max) * 0.012
+            randomState = randomState &* 1_664_525 &+ 1_013_904_223
+            let noiseRight = Float(Int32(bitPattern: randomState)) / Float(Int32.max) * 0.009
+            let phase = 2 * Double.pi * 180 * Double(frame) / 48_000
+            let harmonic = 2 * Double.pi * 360 * Double(frame) / 48_000
+            let block = frame / accepted.sourceBlockFrameCount
+            let modeBlock = block % 64
+            let voicedLeft = Float(sin(phase) * 0.055 + sin(harmonic) * 0.018)
+            let voicedRight = Float(sin(phase + 0.31) * 0.048 - sin(harmonic) * 0.014)
+            let left: Float
+            let right: Float
+            if modeBlock < 32 {
+                left = voicedLeft + noiseLeft
+                right = voicedRight + noiseRight
+            } else if modeBlock < 48 {
+                left = noiseLeft
+                right = voicedRight + noiseRight
+            } else {
+                left = voicedLeft + noiseLeft
+                right = -voicedLeft + noiseRight
+            }
+
+            let acceptedEvent = accepted.processStereoFrame(left: left, right: right)
+            let optimizedEvent = optimized.processStereoFrame(left: left, right: right)
+            XCTAssertEqual(acceptedEvent, optimizedEvent, "event differed at frame \(frame)")
+            if case let .result(acceptedResult) = acceptedEvent {
+                resultCount += 1
+                for threshold: Float in [0.20, 0.35, 0.65, 0.90] {
+                    minimumActivityBoundaryDistance = min(
+                        minimumActivityBoundaryDistance,
+                        abs(acceptedResult.probability - threshold)
+                    )
+                }
+            }
+
+            if let acceptedBlock = accepted.pendingDenoisedBlock,
+               let optimizedBlock = optimized.pendingDenoisedBlock {
+                denoisedBlockCount += 1
+                XCTAssertEqual(acceptedBlock, optimizedBlock)
+                for sample in 0..<acceptedBlock.sourceFrameCount {
+                    for channel in 0..<2 {
+                        XCTAssertEqual(
+                            accepted.denoisedSample(frame: sample, channel: channel),
+                            optimized.denoisedSample(frame: sample, channel: channel),
+                            "wet sample differed at block \(denoisedBlockCount), frame \(sample), channel \(channel)"
+                        )
+                    }
+                }
+                accepted.consumeDenoisedBlock()
+                optimized.consumeDenoisedBlock()
+            } else {
+                XCTAssertEqual(accepted.pendingDenoisedBlock == nil, optimized.pendingDenoisedBlock == nil)
+            }
+        }
+
+        XCTAssertGreaterThan(resultCount, comparisonBlockCount - 2)
+        XCTAssertGreaterThan(denoisedBlockCount, comparisonBlockCount - 4)
+        XCTAssertLessThanOrEqual(
+            minimumActivityBoundaryDistance,
+            0.001,
+            "fixture no longer exercises a close speech-activity decision boundary"
+        )
+        XCTAssertEqual(accepted.completedOptimizedInferencePairCount, 0)
+        XCTAssertEqual(optimized.completedOptimizedInferencePairCount, comparisonBlockCount)
     }
 
     func testExtremeFiniteInputFailsConservativelyAndResetRecovers() throws {
-        let processor = try RNNoiseStereoProcessor(sampleRate: 48_000, model: Self.model)
-        XCTAssertEqual(
-            processor.processStereoFrame(
-                left: .greatestFiniteMagnitude,
-                right: -.greatestFiniteMagnitude
-            ),
-            .pending
-        )
-        for frame in 1..<480 {
-            let event = processor.processStereoFrame(
-                left: frame.isMultiple(of: 2) ? .greatestFiniteMagnitude : -.greatestFiniteMagnitude,
-                right: frame.isMultiple(of: 2) ? -.greatestFiniteMagnitude : .greatestFiniteMagnitude
-            )
-            if event == .failed { break }
+        for rate in [16_000.0, 44_100.0, 48_000.0] {
+            let processor = try RNNoiseStereoProcessor(sampleRate: rate, model: Self.model)
+            var didFail = false
+            for frame in 0..<(processor.sourceBlockFrameCount * 8) {
+                let event = processor.processStereoFrame(
+                    left: frame.isMultiple(of: 2) ? .greatestFiniteMagnitude : -.greatestFiniteMagnitude,
+                    right: frame.isMultiple(of: 2) ? -.greatestFiniteMagnitude : .greatestFiniteMagnitude
+                )
+                if event == .failed {
+                    didFail = true
+                    break
+                }
+            }
+            XCTAssertTrue(didFail, "extreme stream remained active at \(rate) Hz")
+            XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .failed)
+            processor.reset()
+            XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .pending)
         }
-        XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .failed)
-        processor.reset()
-        XCTAssertEqual(processor.processStereoFrame(left: 0, right: 0), .pending)
     }
 
     func testHighestChannelProbabilityAndItsPowerDriveLinkedDecision() throws {
@@ -190,6 +280,62 @@ final class RNNoiseStereoProcessorTests: XCTestCase {
                 freshProcessor.consumeDenoisedBlock()
             }
         }
+    }
+
+    func testDeterministicStereoOutputMatchesAcceptedSnapshot() throws {
+        let processor = try RNNoiseStereoProcessor(
+            sampleRate: 48_000,
+            model: Self.model,
+            usesOptimizedPairedInference: false
+        )
+        var randomState: UInt32 = 0x6A09_E667
+        var snapshot: UInt64 = 14_695_981_039_346_656_037
+
+        for _ in 0..<(processor.sourceBlockFrameCount * 16) {
+            randomState = randomState &* 1_664_525 &+ 1_013_904_223
+            let left = Float(Int32(bitPattern: randomState)) / Float(Int32.max) * 0.08
+            randomState = randomState &* 1_664_525 &+ 1_013_904_223
+            let right = Float(Int32(bitPattern: randomState)) / Float(Int32.max) * 0.06
+            let event = processor.processStereoFrame(left: left, right: right)
+            switch event {
+            case .pending:
+                mixSnapshot(0, into: &snapshot)
+            case .failed:
+                XCTFail("accepted deterministic stream must remain finite")
+            case let .result(result):
+                mixSnapshot(1, into: &snapshot)
+                mixSnapshot(UInt64(result.probability.bitPattern), into: &snapshot)
+                mixSnapshot(UInt64(result.sourcePower.bitPattern), into: &snapshot)
+            }
+
+            if let block = processor.pendingDenoisedBlock {
+                mixSnapshot(UInt64(bitPattern: block.sourceStartFrameIndex), into: &snapshot)
+                mixSnapshot(UInt64(block.sourceFrameCount), into: &snapshot)
+                mixSnapshot(UInt64(block.speechProbability.bitPattern), into: &snapshot)
+                mixSnapshot(UInt64(block.sourcePower.bitPattern), into: &snapshot)
+                mixSnapshot(
+                    UInt64(block.estimatedSNRDB?.bitPattern ?? Float.nan.bitPattern),
+                    into: &snapshot
+                )
+                for frame in 0..<block.sourceFrameCount {
+                    mixSnapshot(
+                        UInt64(processor.denoisedSample(frame: frame, channel: 0).bitPattern),
+                        into: &snapshot
+                    )
+                    mixSnapshot(
+                        UInt64(processor.denoisedSample(frame: frame, channel: 1).bitPattern),
+                        into: &snapshot
+                    )
+                }
+                processor.consumeDenoisedBlock()
+            }
+        }
+
+        XCTAssertEqual(
+            snapshot,
+            16_221_509_679_134_290_260,
+            "accepted RNNoise snapshot changed: \(String(snapshot, radix: 16))"
+        )
     }
 
     func testDenoisedMarkerEnergyIsTaggedToExactSourceBlockAtSupportedRates() throws {
