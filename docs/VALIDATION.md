@@ -6,16 +6,17 @@ VolEq changes the audio people hear, so a green build is necessary but not suffi
 
 Branch: `feat/lookahead-leveling`
 
-Automated status: complete on 2026-07-29.
+Automated status: revalidated on 2026-08-02; revised preset accepted by the owner.
 
 | Check | Result |
 | --- | --- |
 | Developer environment checks | 5 passed |
-| Swift package tests | 36 passed |
+| Swift package tests | 120 passed |
 | Default lookahead at 16 / 44.1 / 48 kHz | 320 / 882 / 960 frames |
 | Quiet-to-loud onset | First loud 20 ms no more than 1 dB above settled loud output |
 | Full-scale isolated impulse | Caught before output and not amplified |
-| Quiet-origin versus loud-origin speech | At least 5 dB separation in the deterministic fixture |
+| Typical program level | −14 dBFS steady input remains within 3 dB of bypass |
+| Quiet-origin versus loud-origin speech | Loud-origin fixture remains 0–2 dB below quiet-origin speech |
 | Reset and zero-lookahead behavior | Passed |
 | Existing Bluetooth conversion and cadence regressions | Passed |
 | Strict-concurrency Swift build | Passed without warnings |
@@ -23,11 +24,11 @@ Automated status: complete on 2026-07-29.
 
 The 20 ms figure is the DSP lookahead delay. A route that uses sample-rate conversion can add converter and device buffering latency outside the portable leveler.
 
-The 10 ms candidate was judged to be the right direction. The owner then requested and accepted the 20 ms preset on 2026-07-29. The acceptance did not identify a device or enumerate the scenarios covered, so the release matrix below remains pending rather than inferring evidence.
+The 10 ms candidate was judged to be the right direction. The owner then requested and accepted the 20 ms lookahead on 2026-07-29. On 2026-08-02, owner listening found the processed mix noticeably quieter than bypass, especially for louder material. The default extra 6 dB loud-source reduction was removed while retaining 6:1 compression, quiet-priority leveling, lookahead protection, and the limiter. Automated loudness checks pass, and the owner reported testing the revised curve everywhere they use VolEq before accepting it. No route-by-route evidence was recorded for this retune, so the specific release checklist remains unchanged.
 
 ### Listening gate
 
-The preset decision is accepted. The following broader release checks remain pending:
+The 20 ms timing and revised default loudness curve are accepted. The following broader release checks remain pending:
 
 - [ ] MacBook speakers: quiet speech, steady loud speech, and quiet-to-loud transition.
 - [ ] Sennheiser HDB 630: regular playback and microphone-active call mode.
