@@ -58,6 +58,11 @@ let package = Package(
             publicHeadersPath: "include"
         ),
         .target(
+            name: "CVolEqRealtimeTestSupport",
+            path: "platforms/macos/Tests/CVolEqRealtimeTestSupport",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "VolEqMacAudio",
             dependencies: ["VolEqCore", "VolEqDSP", "VolEqSpeech", "CVolEqRealtime"],
             path: "platforms/macos/Sources/VolEqMacAudio"
@@ -66,6 +71,11 @@ let package = Package(
             name: "VolEqCommunityMac",
             dependencies: ["VolEqMacAudio", "VolEqSpeech"],
             path: "apps/macos/community/Sources/VolEqCommunityMac"
+        ),
+        .executableTarget(
+            name: "VolEqBenchmark",
+            dependencies: ["VolEqCore", "VolEqDSP", "VolEqSpeech"],
+            path: "tools/benchmark/Sources/VolEqBenchmark"
         ),
         .testTarget(
             name: "VolEqDSPTests",
@@ -79,7 +89,13 @@ let package = Package(
         ),
         .testTarget(
             name: "VolEqMacAudioTests",
-            dependencies: ["VolEqMacAudio"],
+            dependencies: [
+                "VolEqCore",
+                "VolEqDSP",
+                "VolEqSpeech",
+                "VolEqMacAudio",
+                "CVolEqRealtimeTestSupport"
+            ],
             path: "platforms/macos/Tests/VolEqMacAudioTests"
         )
     ],

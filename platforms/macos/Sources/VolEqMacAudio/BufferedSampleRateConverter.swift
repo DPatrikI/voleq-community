@@ -644,8 +644,10 @@ final class AudioIOProcessor {
         outputFormat: AudioStreamBasicDescription,
         settings: LevelingSettings,
         speechAwarenessEnabled: Bool = true,
+        noiseSuppressionEnabled: Bool = true,
         speechModel: RNNoiseModelResource? = nil,
         speechAnalyzerFactory: ((Double) throws -> any SpeechAnalyzing)? = nil,
+        stereoSpeechProcessorFactory: ((Double) throws -> any StereoSpeechProcessing)? = nil,
         contentAnalyzerFactory: ((Double) throws -> any AudioContentAnalyzing)? = nil,
         systemContentAnalysisEnabled: Bool = false
     ) throws {
@@ -682,34 +684,70 @@ final class AudioIOProcessor {
             }
             self.directContentAnalyzer = directContentAnalyzer
             self.conversionContentAnalyzer = conversionContentAnalyzer
-            let directAnalyzer: any SpeechAnalyzing
-            let conversionAnalyzer: any SpeechAnalyzing
             if let speechAnalyzerFactory {
-                directAnalyzer = try speechAnalyzerFactory(outputFormat.mSampleRate)
-                conversionAnalyzer = try speechAnalyzerFactory(inputFormat.mSampleRate)
-            } else {
+                let directAnalyzer = try speechAnalyzerFactory(outputFormat.mSampleRate)
+                let conversionAnalyzer = try speechAnalyzerFactory(inputFormat.mSampleRate)
+                directDynamics = try DynamicsProcessor(
+                    sampleRate: outputFormat.mSampleRate,
+                    settings: settings,
+                    speechAnalyzer: directAnalyzer,
+                    upwardGainAuthorizer: directContentAnalyzer
+                )
+                conversionDynamics = try DynamicsProcessor(
+                    sampleRate: inputFormat.mSampleRate,
+                    settings: settings,
+                    speechAnalyzer: conversionAnalyzer,
+                    upwardGainAuthorizer: conversionContentAnalyzer
+                )
+            } else if noiseSuppressionEnabled {
                 let model = try speechModel ?? Self.loadSpeechModel()
-                directAnalyzer = try RNNoiseSpeechAnalyzer(
+                let directProcessor = try stereoSpeechProcessorFactory?(
+                    outputFormat.mSampleRate
+                ) ?? RNNoiseStereoProcessor(
                     sampleRate: outputFormat.mSampleRate,
                     model: model
                 )
-                conversionAnalyzer = try RNNoiseSpeechAnalyzer(
+                let conversionProcessor = try stereoSpeechProcessorFactory?(
+                    inputFormat.mSampleRate
+                ) ?? RNNoiseStereoProcessor(
                     sampleRate: inputFormat.mSampleRate,
                     model: model
                 )
+                directDynamics = try DynamicsProcessor(
+                    sampleRate: outputFormat.mSampleRate,
+                    settings: settings,
+                    stereoSpeechProcessor: directProcessor,
+                    upwardGainAuthorizer: directContentAnalyzer
+                )
+                conversionDynamics = try DynamicsProcessor(
+                    sampleRate: inputFormat.mSampleRate,
+                    settings: settings,
+                    stereoSpeechProcessor: conversionProcessor,
+                    upwardGainAuthorizer: conversionContentAnalyzer
+                )
+            } else {
+                let model = try speechModel ?? Self.loadSpeechModel()
+                let directAnalyzer = try RNNoiseSpeechAnalyzer(
+                    sampleRate: outputFormat.mSampleRate,
+                    model: model
+                )
+                let conversionAnalyzer = try RNNoiseSpeechAnalyzer(
+                    sampleRate: inputFormat.mSampleRate,
+                    model: model
+                )
+                directDynamics = try DynamicsProcessor(
+                    sampleRate: outputFormat.mSampleRate,
+                    settings: settings,
+                    speechAnalyzer: directAnalyzer,
+                    upwardGainAuthorizer: directContentAnalyzer
+                )
+                conversionDynamics = try DynamicsProcessor(
+                    sampleRate: inputFormat.mSampleRate,
+                    settings: settings,
+                    speechAnalyzer: conversionAnalyzer,
+                    upwardGainAuthorizer: conversionContentAnalyzer
+                )
             }
-            directDynamics = try DynamicsProcessor(
-                sampleRate: outputFormat.mSampleRate,
-                settings: settings,
-                speechAnalyzer: directAnalyzer,
-                upwardGainAuthorizer: directContentAnalyzer
-            )
-            conversionDynamics = try DynamicsProcessor(
-                sampleRate: inputFormat.mSampleRate,
-                settings: settings,
-                speechAnalyzer: conversionAnalyzer,
-                upwardGainAuthorizer: conversionContentAnalyzer
-            )
         } else {
             directContentAnalyzer = nil
             conversionContentAnalyzer = nil
@@ -761,6 +799,25 @@ final class AudioIOProcessor {
         pendingFailureStatus = nil
         return failure
     }
+
+#if DEBUG
+    /// Test-only hooks used to prove callback paths skip contended control locks.
+    func _testOnlyWithParameterLocksHeld<Result>(
+        _ body: () throws -> Result
+    ) rethrows -> Result {
+        try directDynamics._testOnlyWithParameterLockHeld {
+            try conversionDynamics._testOnlyWithParameterLockHeld(body)
+        }
+    }
+
+    func _testOnlyWithFailureLockHeld<Result>(
+        _ body: () throws -> Result
+    ) rethrows -> Result {
+        failureLock.lock()
+        defer { failureLock.unlock() }
+        return try body()
+    }
+#endif
 
     func process(
         input: UnsafePointer<AudioBufferList>,

@@ -26,11 +26,14 @@ The speech-leveling signal-processing implementation. It operates on numeric aud
 
 ### `VolEqSpeech`
 
-The portable, injectable speech-analysis API and offline RNNoise implementation.
-It consumes fixed 10 ms mono source blocks, resamples only its analysis stream
-when needed, and reports normalized speech probability, source power, source
-frame coverage, and analysis latency. It uses `CRNNoise` and the minimal
-`CSpeexResampler` target; denoised RNNoise samples are discarded on this branch.
+The portable, injectable speech-processing API and offline RNNoise
+implementation. Stereo routes prepare one independent RNNoise state per channel
+while sharing the immutable bundled model. The processor consumes source-rate
+frames, converts only its RNNoise stream to and from 48 kHz when necessary, and
+reports normalized speech probability, source power, source-frame coverage,
+estimated SNR, decision latency, and denoised coverage. The highest channel
+probability and that same channel's source power form one linked decision. It
+uses `CRNNoise` and the minimal `CSpeexResampler` target.
 
 ### `VolEqMacAudio`
 
@@ -54,12 +57,32 @@ The open-source macOS application shell. It owns the Community interface, permis
 - UI settings are published as snapshots. The callback uses its previous snapshot if an update lock is busy.
 - The leveler allocates its linked-stereo lookahead storage during construction. Its default 20 ms delay lets the detector lower gain before a loud onset is emitted; the delay, detector, and gain history start empty whenever the audio route is rebuilt. The first lookahead period is therefore silence by design. A future peak may lower the gain envelope immediately but may never raise it, and its maximum-gain cap travels with the delayed frame so release smoothing cannot outrun an isolated transient. The delayed frame still passes through the final safety limiter.
 - RNNoise model loading and checksum verification finish before the process tap
-  is created. Analyzer-state creation, resampler setup, and buffer allocation
+  is created. Two-channel state creation, resampler setup, and buffer allocation
   finish before `AudioDeviceStart`, which is when the prepared process tap can
-  begin replacing original audio. The callback feeds prepared state only. Speech
+  begin replacing original audio. Components that allocate lazily are primed
+  before that point, and route resets reconstruct their resamplers on the
+  control thread. The callback feeds prepared state only. Speech
   eligibility is stored beside delayed audio and transient caps; a result can
   backfill only the source frames it covers, so an opening syllable is preserved
   without granting upward gain to earlier unrelated sound.
+- Speech-aware leveling and mild suppression are selected independently before
+  the route starts. With suppression enabled, the route prepares two RNNoise
+  states per processing path and uses the aligned wet timeline below. With only
+  suppression disabled, it prepares the accepted mono RNNoise analyzer instead:
+  speech-aware eligibility remains active, wet audio is never applied, and the
+  DSP timeline returns to 20 ms. Disabling speech awareness skips all model and
+  analyzer construction and uses the base leveler.
+- RNNoise probability describes the current 10 ms input block, while wet audio
+  follows a separate overlap-add timeline. Absolute source-frame tags and
+  fixed-capacity dry/wet storage validate every mapping before backfilling the
+  lookahead ring. The pinned RNNoise main reconstruction maps principally to
+  input block `k - 2`, so the first two wet blocks are warm-up and remain dry.
+  The owner accepted the resulting 30 ms 48 kHz timeline. Quality-3 Speex
+  resampling adds only its measured round-trip delay: 24 + 24 frames at 16 kHz
+  and 24 + 26 frames at 44.1 kHz. Total DSP delay is 528 frames (33.0 ms), 1,373
+  frames (about 31.13 ms), and 1,440 frames (30.0 ms) at 16, 44.1, and 48 kHz.
+  The existing detector still has at least its accepted 20 ms to protect loud
+  onsets.
 - Non-quiet speech opens at probability 0.65. Quiet audio requires probability
   0.90 for two consecutive 10 ms blocks; the accepted 20 ms lookahead lets the
   confirmed decision cover both blocks before they become audible. Once quiet
@@ -75,9 +98,20 @@ The open-source macOS application shell. It owns the Community interface, permis
   immediately. Gain below unity remains immediate so loud onsets retain
   lookahead protection. Disabling
   speech-aware leveling while stopped skips model and analyzer construction and
-  uses the base leveler.
-- On macOS, RNNoise voice activity is checked by the operating system's offline
-  sound classifier before upward gain is permitted. Audio reaches that slower
+  uses the base leveler. The suppression switch is also fixed while running, so
+  changing either mode never constructs or destroys processing state in the
+  callback.
+- Mild suppression has a separate activity gate so leveling's 200 ms hold and
+  150 ms eligibility fade do not lengthen its timing. The linked wet target is
+  50% when estimated SNR is at or below 18 dB, follows a smoothstep taper to
+  zero by 24 dB, and is zero for invalid or negligible removed power. The
+  per-sample linked coefficient takes 30 ms for dry-to-50% and 100 ms for
+  50%-to-dry. Dry detection, transient caps, compression, and limiting remain
+  unchanged; aligned wet/dry blending happens before the linked gain. The
+  slower platform authority must authorize speech, and a music result targets
+  dry immediately. Non-speech and music are fully dry after the release.
+- On macOS, RNNoise voice activity is combined with the operating system's offline
+  sound classifier before upward gain or suppression is permitted. Audio reaches that slower
   classifier through a preallocated single-producer/single-consumer ring; only
   an atomic permission bit crosses back into the real-time callback. The system
   classifier uses 500 ms windows with 50% overlap. Two consecutive speech
@@ -97,7 +131,9 @@ The open-source macOS application shell. It owns the Community interface, permis
   stale nominal input rate.
 - Model construction, latency inspection, reset, and settings mutation are
   control-thread operations. Only prepared sample processing is real-time safe.
-  Non-finite analysis latches the processor in a silent failed state and publishes
+  The first RNNoise warm-up output remains dry. Non-finite input or metadata,
+  corrupt wet samples, impossible source mappings, FIFO overflow, or resampler
+  failure latches the processor in a silent failed state and publishes
   one preallocated failure signal without blocking. A control-thread monitor then
   tears down the replacement path so Core Audio restores the original audio.
 - The processor measures the aggregate callback's input/output frame cadence against Core Audio host timestamps, not only the tap's advertised rates or a single pair of buffer sizes. A shared effective clock indicates that tap drift compensation already synchronized the Bluetooth route and duplicate conversion must be bypassed; distinct input/output clocks use Audio Converter Services with preallocated input and output FIFOs. The output FIFO pre-rolls briefly and writes only complete device periods. A full FIFO drops its oldest frame to recover at the live edge instead of accumulating latency, while missing or inconclusive timing fails safely and sustained output underruns never emit repeated partial periods.

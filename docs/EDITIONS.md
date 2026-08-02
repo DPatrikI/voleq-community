@@ -10,6 +10,8 @@ This public repository provides a useful, buildable application with:
 - an application selector and refresh action;
 - a start/stop leveling control;
 - an on/off switch for speech-aware quiet-gain protection;
+- a separate on/off switch for the automatic mild speech-noise-suppression
+  preset;
 - safe recovery when the active system output route or Bluetooth profile changes;
 - the maintained core algorithm and platform adapter;
 - command-line build and test workflows.
