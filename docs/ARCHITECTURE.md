@@ -50,6 +50,16 @@ changing public APIs, source tags, converted FIFO bounds, or failure behavior.
 
 The macOS adapter. It owns Core Audio process discovery, process taps, aggregate-device lifecycle, audio-buffer adaptation, and output-device interaction. Apple-specific identifiers stay here.
 
+Within the callback pipeline, `AudioIOProcessor` owns the prepared direct and
+converted DSP paths and selects exactly one after `AudioCallbackCadenceAnalyzer`
+resolves the hardware clocks. `BufferedSampleRateConverter` owns the Core Audio
+converter, scratch storage, pre-roll, and complete-period delivery. Its input
+and output `StereoFrameRingBuffer` instances own bounded callback-only storage
+and drop the oldest frame on overflow so conversion recovers at the live edge.
+`AudioIOProcessingDiagnostics` is the immutable control-thread snapshot
+published once after route selection. These types do not construct resources,
+allocate, block, or log while processing a callback.
+
 ### `VolEqCommunityMac`
 
 The open-source macOS application shell. It owns the Community interface, permission-facing copy, and edition-specific product presentation. It should not contain DSP or raw Core Audio lifecycle logic.
