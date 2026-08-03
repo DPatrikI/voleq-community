@@ -20,6 +20,13 @@ The future Premium repository is intended to keep its original, separate files p
 
 MPL-2.0 does not grant rights to contributor trademarks. The VolEq product name, logo, and official visual identity are handled separately in [TRADEMARKS.md](../TRADEMARKS.md).
 
+The source and generated application-icon assets under
+`apps/macos/community/Resources` are first-party VolEq branding, not third-party
+dependencies. They are not licensed under MPL-2.0. Their source paths,
+derivation, and generated outputs are documented in
+`apps/macos/community/Resources/AppIconSource/README.md`; use and redistribution
+remain subject to `TRADEMARKS.md`.
+
 ## Third-party material
 
 Dependencies, test fixtures, icons, fonts, and sample audio must have compatible, documented provenance before they are committed. Do not add copyrighted meeting recordings or unclear audio samples. Prefer original synthetic fixtures or CC0 material.

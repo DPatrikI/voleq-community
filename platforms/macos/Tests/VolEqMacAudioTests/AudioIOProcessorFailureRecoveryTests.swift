@@ -154,16 +154,50 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
         let controller = AudioCaptureController(
             installSystemObservers: false,
             initiallyRunning: true,
-            stopResourcesDidRun: { resourceStopCount += 1 }
+            stopResourcesDidRun: { resourceStopCount += 1 },
+            loadProcessesOverride: { [] }
         )
         XCTAssertTrue(controller.isRunning)
+        XCTAssertEqual(controller.runtimeState, .active)
         XCTAssertTrue(controller.recoverPendingProcessingFailure(from: processor))
         XCTAssertEqual(resourceStopCount, 1)
         XCTAssertFalse(controller.isRunning)
+        XCTAssertEqual(controller.runtimeState, .failed)
         XCTAssertTrue(controller.status.contains("Original audio was restored"))
+
+        let failureStatus = controller.status
+        controller._testOnlyHandleOutputRouteChange()
+        XCTAssertEqual(controller.runtimeState, .failed)
+        XCTAssertEqual(controller.status, failureStatus)
+
+        controller.refreshProcesses()
+        XCTAssertEqual(controller.runtimeState, .failed)
+        XCTAssertEqual(controller.status, failureStatus)
 
         XCTAssertFalse(controller.recoverPendingProcessingFailure(from: processor))
         XCTAssertEqual(resourceStopCount, 1)
+    }
+
+    @available(macOS 14.2, *)
+    @MainActor
+    func testSuccessfulRefreshClearsOnlyAProcessEnumerationFailure() {
+        enum RefreshFailure: Error { case unavailable }
+        var shouldFail = true
+        let controller = AudioCaptureController(
+            installSystemObservers: false,
+            loadProcessesOverride: {
+                if shouldFail { throw RefreshFailure.unavailable }
+                return []
+            }
+        )
+
+        controller.refreshProcesses()
+        XCTAssertEqual(controller.runtimeState, .failed)
+
+        shouldFail = false
+        controller.refreshProcesses()
+        XCTAssertEqual(controller.runtimeState, .ready)
+        XCTAssertTrue(controller.status.contains("No app is producing audio"))
     }
 
     @available(macOS 14.2, *)
@@ -245,6 +279,7 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
         )
 
         controller._testOnlyHandleOutputRouteChange()
+        XCTAssertEqual(controller.runtimeState, .recovering)
         await fulfillment(of: [restarted], timeout: 2)
 
         XCTAssertEqual(stopCount, 1)

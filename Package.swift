@@ -97,6 +97,11 @@ let package = Package(
                 "CVolEqRealtimeTestSupport"
             ],
             path: "platforms/macos/Tests/VolEqMacAudioTests"
+        ),
+        .testTarget(
+            name: "VolEqCommunityMacTests",
+            dependencies: ["VolEqCommunityMac"],
+            path: "apps/macos/community/Tests/VolEqCommunityMacTests"
         )
     ],
     swiftLanguageVersions: [.v5]
