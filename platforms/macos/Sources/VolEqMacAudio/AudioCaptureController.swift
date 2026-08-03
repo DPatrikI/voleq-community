@@ -23,6 +23,15 @@ public enum CaptureMode: String, CaseIterable, Identifiable {
     public var id: Self { self }
 }
 
+public enum CaptureRuntimeState: Equatable, Sendable {
+    case stopped
+    case ready
+    case preparing
+    case active
+    case recovering
+    case failed
+}
+
 @MainActor
 @available(macOS 14.2, *)
 public final class AudioCaptureController: ObservableObject {
@@ -34,6 +43,7 @@ public final class AudioCaptureController: ObservableObject {
         didSet { audioProcessor?.updateSettings(levelingSettings) }
     }
     @Published public private(set) var isRunning = false
+    @Published public private(set) var runtimeState: CaptureRuntimeState = .stopped
     @Published public private(set) var status = "Choose an audio-producing app, then start."
 
     private var tapID = AudioObjectID(kAudioObjectUnknown)
@@ -51,7 +61,9 @@ public final class AudioCaptureController: ObservableObject {
     private var processingDiagnosticsTask: Task<Void, Never>?
     private let stopResourcesDidRun: (() -> Void)?
     private let startPipelineOverride: (@MainActor () -> Void)?
+    private let loadProcessesOverride: (@MainActor () throws -> [AudioProcess])?
     private let routeRecoveryDelayNanoseconds: UInt64
+    private var processRefreshFailed = false
     private let ioQueue = DispatchQueue(
         label: "com.patrikistvandoczy.voleq.community.audio",
         qos: .userInteractive
@@ -70,17 +82,22 @@ public final class AudioCaptureController: ObservableObject {
         initiallyRunning: Bool = false,
         stopResourcesDidRun: (() -> Void)? = nil,
         startPipelineOverride: (@MainActor () -> Void)? = nil,
+        loadProcessesOverride: (@MainActor () throws -> [AudioProcess])? = nil,
         routeRecoveryDelayNanoseconds: UInt64 = 350_000_000
     ) {
         isRunning = initiallyRunning
+        runtimeState = initiallyRunning ? .active : .stopped
         self.stopResourcesDidRun = stopResourcesDidRun
         self.startPipelineOverride = startPipelineOverride
+        self.loadProcessesOverride = loadProcessesOverride
         self.routeRecoveryDelayNanoseconds = routeRecoveryDelayNanoseconds
         if installSystemObservers {
             refreshProcesses()
             do {
                 try installDefaultOutputListener()
             } catch {
+                processRefreshFailed = false
+                runtimeState = .failed
                 status = error.localizedDescription
             }
         }
@@ -99,29 +116,7 @@ public final class AudioCaptureController: ObservableObject {
 
     public func refreshProcesses() {
         do {
-            let ids: [AudioObjectID] = try readArray(
-                objectID: AudioObjectID(kAudioObjectSystemObject),
-                selector: kAudioHardwarePropertyProcessObjectList
-            )
-            let ownPID = getpid()
-            var found: [AudioProcess] = []
-
-            for id in ids {
-                let pid: pid_t = try readValue(objectID: id, selector: kAudioProcessPropertyPID)
-                guard pid != ownPID else { continue }
-                let isProducingOutput: UInt32 = (try? readValue(
-                    objectID: id,
-                    selector: kAudioProcessPropertyIsRunningOutput
-                )) ?? 0
-                guard isProducingOutput != 0 else { continue }
-
-                let bundleID = (try? readString(objectID: id, selector: kAudioProcessPropertyBundleID)) ?? ""
-                let runningApp = NSRunningApplication(processIdentifier: pid)
-                let name = runningApp?.localizedName
-                    ?? bundleID.split(separator: ".").last.map(String.init)
-                    ?? "Process \(pid)"
-                found.append(AudioProcess(id: id, pid: pid, name: name, bundleID: bundleID))
-            }
+            let found = try loadProcessesOverride?() ?? readActiveProcesses()
 
             processes = found.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             if let selectedProcessID, !processes.contains(where: { $0.id == selectedProcessID }) {
@@ -130,14 +125,46 @@ public final class AudioCaptureController: ObservableObject {
             if selectedProcessID == nil {
                 selectedProcessID = processes.first?.id
             }
-            if !isRunning {
+            let canReplaceDiagnostic = runtimeState != .failed || processRefreshFailed
+            processRefreshFailed = false
+            if !isRunning, canReplaceDiagnostic {
+                runtimeState = .ready
                 status = processes.isEmpty
                     ? "No app is producing audio yet. Start meeting audio, then refresh."
                     : "Ready. Audio will stay on your current default output device."
             }
         } catch {
+            processRefreshFailed = true
+            runtimeState = .failed
             status = error.localizedDescription
         }
+    }
+
+    private func readActiveProcesses() throws -> [AudioProcess] {
+        let ids: [AudioObjectID] = try readArray(
+            objectID: AudioObjectID(kAudioObjectSystemObject),
+            selector: kAudioHardwarePropertyProcessObjectList
+        )
+        let ownPID = getpid()
+        var found: [AudioProcess] = []
+
+        for id in ids {
+            let pid: pid_t = try readValue(objectID: id, selector: kAudioProcessPropertyPID)
+            guard pid != ownPID else { continue }
+            let isProducingOutput: UInt32 = (try? readValue(
+                objectID: id,
+                selector: kAudioProcessPropertyIsRunningOutput
+            )) ?? 0
+            guard isProducingOutput != 0 else { continue }
+
+            let bundleID = (try? readString(objectID: id, selector: kAudioProcessPropertyBundleID)) ?? ""
+            let runningApp = NSRunningApplication(processIdentifier: pid)
+            let name = runningApp?.localizedName
+                ?? bundleID.split(separator: ".").last.map(String.init)
+                ?? "Process \(pid)"
+            found.append(AudioProcess(id: id, pid: pid, name: name, bundleID: bundleID))
+        }
+        return found
     }
 
     public func toggle() {
@@ -146,12 +173,14 @@ public final class AudioCaptureController: ObservableObject {
 
     public func start() {
         guard !isRunning else { return }
+        processRefreshFailed = false
         routeRecoveryTask?.cancel()
         routeRecoveryTask = nil
         startPipeline()
     }
 
     private func startPipeline() {
+        runtimeState = .preparing
         if let startPipelineOverride {
             startPipelineOverride()
             return
@@ -280,6 +309,7 @@ public final class AudioCaptureController: ObservableObject {
             )
 
             isRunning = true
+            runtimeState = .active
             let routeStatus = processor.usesSampleRateConversion
                 ? " Resolving route timing (\(Int(processor.inputSampleRate))→\(Int(processor.outputSampleRate)) Hz labels)…"
                 : ""
@@ -295,6 +325,7 @@ public final class AudioCaptureController: ObservableObject {
         } catch {
             stopResources()
             isRunning = false
+            runtimeState = .failed
             status = error.localizedDescription
         }
     }
@@ -304,6 +335,7 @@ public final class AudioCaptureController: ObservableObject {
         routeRecoveryTask = nil
         stopResources()
         isRunning = false
+        runtimeState = .stopped
         status = "Stopped. Original application audio is restored."
     }
 
@@ -460,6 +492,8 @@ public final class AudioCaptureController: ObservableObject {
 
     private func handleOutputRouteChange() {
         guard isRunning else {
+            guard runtimeState != .failed else { return }
+            runtimeState = .ready
             status = processes.isEmpty
                 ? "No app is producing audio yet. Start meeting audio, then refresh."
                 : "Ready. Audio will use the current default output device."
@@ -468,6 +502,7 @@ public final class AudioCaptureController: ObservableObject {
 
         routeRecoveryTask?.cancel()
         stopResources()
+        runtimeState = .recovering
         status = "The output device changed. Reconnecting safely…"
         let recoveryDelayNanoseconds = routeRecoveryDelayNanoseconds
         routeRecoveryTask = Task { @MainActor [weak self] in
@@ -494,6 +529,8 @@ public final class AudioCaptureController: ObservableObject {
     private func recoverFromProcessingFailure(_ conversionStatus: OSStatus) {
         stopResources()
         isRunning = false
+        processRefreshFailed = false
+        runtimeState = .failed
         let operation = conversionStatus == speechAnalysisFailed
             ? "Analyze speech locally"
             : "Convert audio for the output device"

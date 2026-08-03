@@ -10,6 +10,10 @@
     <string>VolEqCommunityMac</string>
     <key>CFBundleIdentifier</key>
     <string>com.patrikistvandoczy.voleq.community</string>
+    <key>CFBundleIconFile</key>
+    <string>VolEqCommunity.icns</string>
+    <key>VolEqMenuBarTemplateFile</key>
+    <string>VolEqMenuBarTemplate.png</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

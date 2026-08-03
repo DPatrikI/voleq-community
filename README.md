@@ -15,6 +15,7 @@ The Community app intentionally has a small surface:
 - attach to one currently active application or the device-wide output mix;
 - turn speech-aware quiet-gain protection on or off while stopped;
 - automatically apply mild noise suppression with speech-aware leveling;
+- choose between a conventional utility window and a menu-bar popover; and
 - use fixed, safe speech-leveling and mild-noise-suppression presets.
 
 The source is open for inspection, modification, and contribution. VolEq Premium is planned as a separately distributed application with advanced controls, profiles, automation, automatic switching, and commercial support. See [the edition boundary](docs/EDITIONS.md).
@@ -49,6 +50,12 @@ Build and launch it:
 ```
 
 The application is assembled at `dist/VolEq Community.app`.
+
+Window is the default presentation for a new installation. Open Settings to
+switch to Menu Bar presentation; the choice applies immediately, persists
+locally, and does not restart active leveling. Closing a control window or
+dismissing the popover does not quit VolEq. Use the application menu or popover
+Quit action when you intend to stop the process.
 
 ## How it works
 
@@ -93,6 +100,13 @@ docs/                     Architecture, editions, licensing, and roadmap
 Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing package boundaries.
 Dependency revisions, licenses, model checksums, and the manual reproduction
 workflow are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+The application icon is derived deterministically from the original VolEq
+premium Android artwork. Run `swift scripts/generate-macos-icon.swift` to
+rebuild the `.icns` and native menu-bar template from the
+preserved source layers. Their provenance and branding status are documented in
+[AppIconSource/README.md](apps/macos/community/Resources/AppIconSource/README.md)
+and [TRADEMARKS.md](TRADEMARKS.md).
 
 ## Contributing
 

@@ -128,9 +128,32 @@ boost, or loss of quiet-speech leveling remained in the accepted build.
 The affected synchronized route was retested and accepted after content analysis
 was split between the direct output clock and converted input clock.
 
+## macOS frontend and presentation
+
+Automated coverage:
+
+| Check | Evidence |
+| --- | --- |
+| Presentation preference | Unit tests cover Window defaulting, Menu Bar persistence, and unknown-value fallback |
+| Shared presentation metadata | Unit tests require exactly Window and Menu Bar with distinct, complete metadata |
+| Menu-bar brand image | Unit tests verify the committed template raster and intrinsic 18-by-18-point `NSImage` size |
+| Processing-failure status | Regression tests verify route and process refreshes preserve unrelated failure diagnostics |
+| Release resources | The macOS build verifies generated-asset drift, packaged image decoding, the property list, and the ad-hoc signature |
+| Developer environment checks / Swift tests | 5 / 131 passed |
+
+The full-color application icon and monochrome status-item mark are generated
+deterministically from the original VolEq premium Android icon layers. The
+menu-bar regression test verifies template rendering and an intrinsic
+18-by-18-point `NSImage` size.
+
+Runtime checks covered presentation switching, utility-window close and reopen,
+Settings access, persistence across relaunch, and explicit Quit. Full
+state-by-state visual and accessibility inspection remains a release-validation
+requirement.
+
 ## Mild noise suppression
 
-Automated status: 117 Swift tests pass on 2026-08-02, including authorization,
+Automated status: 131 Swift tests pass on 2026-08-03, including authorization,
 right-only, anti-phase, reset, allocation, 30 ms latency, real-model marker
 alignment, noise reduction, speech projection, stereo balance, and clean-speech
 transparency. Five final CPU runs pass the unchanged 5% gate. Owner listening of
@@ -140,7 +163,7 @@ acceptance remains pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 117 passed |
+| Developer environment checks / Swift tests | 5 / 131 passed |
 | Speech-aware / suppression coupling | The enabled route always prepares stereo suppression for direct and converted paths; disabling speech awareness skips both mono and stereo speech-processor construction and retains base-leveler sample parity |
 | Shared immutable model and independent L/R RNNoise state | Passed |
 | Ordered-float equivalence | Accepted snapshot remains exact; a 1,000-block stereo/right-only/anti-phase differential stream is bit-exact for events, matching-channel power, probability, SNR metadata, and every L/R wet sample in debug and release-optimized builds, including probability within 0.00038 of an activity boundary |

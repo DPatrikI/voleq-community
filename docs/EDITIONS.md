@@ -12,6 +12,9 @@ This public repository provides a useful, buildable application with:
 - an on/off switch for speech-aware quiet-gain protection with automatic mild
   speech-noise suppression;
 - safe recovery when the active system output route or Bluetooth profile changes;
+- selectable native utility-window and menu-bar presentations;
+- persistent local presentation preference and background operation after a
+  control surface is dismissed;
 - the maintained core algorithm and platform adapter;
 - command-line build and test workflows.
 
@@ -24,8 +27,7 @@ The planned private repository may add separate proprietary files for:
 - advanced leveling controls;
 - automatic app selection, output-device preferences, and routing policies;
 - profiles and per-app preferences;
-- menu-bar and background workflows;
-- import, export, diagnostics, and guided recovery;
+- import/export, advanced exportable diagnostics, and guided recovery;
 - signed/notarized or App Store distribution;
 - commercial support and managed integrations.
 

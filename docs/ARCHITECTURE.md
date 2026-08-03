@@ -62,7 +62,41 @@ allocate, block, or log while processing a callback.
 
 ### `VolEqCommunityMac`
 
-The open-source macOS application shell. It owns the Community interface, permission-facing copy, and edition-specific product presentation. It should not contain DSP or raw Core Audio lifecycle logic.
+The open-source macOS application shell. It owns the Community interface,
+permission-facing copy, and edition-specific product presentation. A shared
+`VolEqControlSurfaceModel` contract supplies the utility window and menu-bar
+popover with the same capture targets, settings, runtime state, status, and
+commands. `AppDelegate` owns native window controllers, Dock activation policy,
+Settings presentation, and explicit termination behavior. Changing between
+Window and Menu Bar presentation changes only application-shell state; it does
+not rebuild or mutate the active audio path.
+
+The application shell also owns first-party branding integration. The build
+copies a generated `.icns` and a 256-by-256-pixel template raster for the macOS
+menu bar. The application icon is supplied by `NSApplication`; at runtime the
+template `NSImage` has an intrinsic 18-by-18-point size. Resource filenames are
+declared in the application property list and consumed through a typed branding
+resource component. `scripts/generate-macos-icon.swift` recreates the files
+deterministically from the preserved original VolEq premium icon layers. It
+does not generate or reinterpret the logo.
+
+The application target should not contain DSP or raw Core Audio lifecycle
+logic.
+
+The macOS shell maintains these presentation invariants:
+
+- Window and Menu Bar are mutually exclusive presentations over the same
+  application model and audio controller.
+- Window presentation uses regular activation policy and Dock presence; Menu
+  Bar presentation uses accessory activation policy and keeps Settings and Quit
+  reachable from the popover.
+- Closing the utility window or dismissing the popover does not stop leveling or
+  terminate the application. Reopening the application restores the utility
+  window when Window presentation is active.
+- Removing the menu-bar item returns the application to Window presentation.
+  A failed activation-policy change rolls back to the previously reachable
+  presentation.
+- Explicit Quit stops active leveling before process termination.
 
 ## Dependency rules
 
@@ -162,3 +196,6 @@ The open-source macOS application shell. It owns the Community interface, permis
 ## Future platforms
 
 A new operating system should add a sibling under `platforms/<platform>` and a product under `apps/<platform>`. Shared algorithms belong in `packages`, not in a platform folder. This layout supports future platforms; it does not claim they are currently implemented.
+
+Frontend ownership and the conditions for reconsidering a shared UI toolkit are
+defined in [ADR 0001: Thin Native Frontends](decisions/0001-thin-native-frontends.md).
