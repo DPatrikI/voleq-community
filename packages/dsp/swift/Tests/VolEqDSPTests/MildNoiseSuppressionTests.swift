@@ -303,6 +303,36 @@ final class MildNoiseSuppressionTests: XCTestCase {
         XCTAssertTrue(processor.consumeProcessingFailure())
     }
 
+    func testNonFiniteWetMetadataFailsClosedAndResetRecovers() throws {
+        let speech = ScriptedStereoSpeechProcessor(
+            sampleRate: 48_000,
+            probability: 0.99,
+            sourcePower: 0.01,
+            snrDB: .infinity,
+            wetGenerator: { _, _ in 0 }
+        )
+        let processor = try DynamicsProcessor(
+            sampleRate: 48_000,
+            settings: neutralSettings(),
+            stereoSpeechProcessor: speech,
+            upwardGainAuthorizer: MutableSuppressionAuthority(allowsUpwardGain: true)
+        )
+
+        for _ in 0..<960 {
+            _ = processor.processFrame(left: 0.1, right: 0.1)
+        }
+        XCTAssertTrue(processor.consumeProcessingFailure())
+        XCTAssertEqual(processor.processFrame(left: 0.1, right: 0.1).left, 0)
+        XCTAssertEqual(processor.processFrame(left: 0.1, right: 0.1).right, 0)
+
+        speech.snrDB = 10
+        processor.reset()
+        for _ in 0..<960 {
+            _ = processor.processFrame(left: 0.1, right: 0.1)
+        }
+        XCTAssertFalse(processor.consumeProcessingFailure())
+    }
+
     func testNonFiniteWetSamplesFailBeforeBlending() throws {
         let speech = ScriptedStereoSpeechProcessor(
             sampleRate: 48_000,

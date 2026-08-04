@@ -24,6 +24,18 @@ Platform-neutral settings and product-domain types. It must not import SwiftUI, 
 
 The speech-leveling signal-processing implementation. It operates on numeric audio frames and must not know where audio came from or where it will be sent. New platform adapters should reuse this package instead of copying the algorithm.
 
+`DynamicsProcessor` remains the public orchestration seam. Its internal runtime
+state is separated by domain: `DynamicsRuntimeParameters` owns immutable
+settings snapshots and normalized coefficients; `DynamicsGainDetector` owns
+envelope, gain, and future-peak decisions; `DynamicsLookaheadBuffer` owns the
+preallocated `DelayedDynamicsFrame` ring, including delayed samples, caps,
+eligibility, suppression metadata, and source tags; `SpeechDynamicsCoordinator`
+owns block assembly, authorization, denoised backfill, and suppression targets;
+and `DynamicsSuppressionMixer` owns the dry/wet suppression envelope. The
+orchestrator still controls call ordering, settings publication, reset, and
+failure latching, so every component is prepared before callback processing and
+reset returns the complete timeline to its initial state.
+
 ### `VolEqSpeech`
 
 The portable, injectable speech-processing API and offline RNNoise
@@ -34,6 +46,23 @@ reports normalized speech probability, source power, source-frame coverage,
 estimated SNR, decision latency, and denoised coverage. The highest channel
 probability and that same channel's source power form one linked decision. It
 uses `CRNNoise` and the minimal `CSpeexResampler` target.
+
+`RNNoiseStereoProcessor` remains the public lifecycle and processing
+orchestrator. `RNNoiseInferenceEngine` owns independent L/R states, paired
+inference, and the rotating analysis/denoised buffers. `RNNoiseResampler` owns
+input/output converters, measured latency, scratch storage, and reset.
+`RNNoiseTaggedStereoHistory` keeps dry samples with source-frame tags;
+`RNNoiseDecisionHistory` keeps probabilities, power, and SNR metadata; and
+`RNNoiseWetOutputFIFO` keeps converted wet frames with source tags. These
+components retain the two-block reconstruction, exact source alignment,
+independent channel inference, failure latching, and zero steady-state
+callback allocations. Their internal boundaries are implementation details;
+the public processor API and latency policy do not change.
+
+The validated route matrix remains 16, 44.1, and 48 kHz. The known fractional
+10 ms cadence issue at 22,050 Hz is pre-existing and remains outside the
+supported matrix; this architecture-only refactor does not silently repair or
+promote that route.
 
 On Apple Silicon, the internal RNNoise adapter evaluates the two states through
 a paired float kernel covering sparse GRU and dense/conv layers. It shares
@@ -49,6 +78,12 @@ changing public APIs, source tags, converted FIFO bounds, or failure behavior.
 ### `VolEqMacAudio`
 
 The macOS adapter. It owns Core Audio process discovery, process taps, aggregate-device lifecycle, audio-buffer adaptation, and output-device interaction. Apple-specific identifiers stay here.
+
+`AudioCaptureController` remains the main-actor lifecycle owner. Process
+discovery is isolated behind its existing injectable `loadProcessesOverride`
+seam for direct tests, while published state, Core Audio resources, teardown
+ordering, route recovery, and diagnostics scheduling remain together so no
+controller-facing lifecycle transition can bypass cleanup.
 
 Within the callback pipeline, `AudioIOProcessor` owns the prepared direct and
 converted DSP paths and selects exactly one after `AudioCallbackCadenceAnalyzer`
@@ -105,6 +140,8 @@ The macOS shell maintains these presentation invariants:
 - Platform adapters may depend on Core, DSP, and Speech.
 - Product apps depend on platform adapters and may compose shared packages.
 - Premium-only files must live in the separate private repository; public MPL-covered files are consumed as dependencies rather than copied or forked.
+- New internal DSP and speech types remain package-private implementation
+  boundaries; no public API or `Package.swift` interface is added for them.
 
 ## Real-time audio rules
 

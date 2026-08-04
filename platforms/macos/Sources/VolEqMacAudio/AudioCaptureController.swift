@@ -51,7 +51,7 @@ public final class AudioCaptureController: ObservableObject {
     private var ioProcID: AudioDeviceIOProcID?
     private var audioProcessor: AudioIOProcessor?
     private var activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
-    private var activeOutputListener: AudioObjectPropertyListenerBlock?
+    nonisolated(unsafe) private var activeOutputListener: AudioObjectPropertyListenerBlock?
     private var activeOutputListenerAddresses: [AudioObjectPropertyAddress] = []
     // Swift deinitializers are nonisolated. All mutation still occurs on the
     // main actor; this annotation only lets deinit unregister the retained
@@ -104,6 +104,32 @@ public final class AudioCaptureController: ObservableObject {
     }
 
     deinit {
+        routeRecoveryTask?.cancel()
+        processingDiagnosticsTask?.cancel()
+
+        if activeOutputDeviceID != kAudioObjectUnknown,
+           let activeOutputListener {
+            for var address in activeOutputListenerAddresses {
+                AudioObjectRemovePropertyListenerBlock(
+                    activeOutputDeviceID,
+                    &address,
+                    routeQueue,
+                    activeOutputListener
+                )
+            }
+        }
+
+        if aggregateDeviceID != kAudioObjectUnknown, let ioProcID {
+            AudioDeviceStop(aggregateDeviceID, ioProcID)
+            AudioDeviceDestroyIOProcID(aggregateDeviceID, ioProcID)
+        }
+        if aggregateDeviceID != kAudioObjectUnknown {
+            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+        }
+        if tapID != kAudioObjectUnknown {
+            AudioHardwareDestroyProcessTap(tapID)
+        }
+
         guard let defaultOutputListener else { return }
         var address = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
         AudioObjectRemovePropertyListenerBlock(
