@@ -14,8 +14,17 @@ final class RNNoiseInternalComponentTests: XCTestCase {
         XCTAssertEqual(history.frame(at: 12)?.right, -0.25)
         XCTAssertNil(history.frame(at: 8))
         let powers = try! XCTUnwrap(history.sourcePowers(start: 12, frameCount: 2))
-        let expectedLeftPower = Float((0.5 * 0.5 + 0.25 * 0.25) / 2)
-        let expectedRightPower = Float((0.25 * 0.25 + 0.5 * 0.5) / 2)
+        let leftFirst: Float = 0.5
+        let leftSecond: Float = 0.25
+        let rightFirst: Float = 0.25
+        let rightSecond: Float = 0.5
+        let sampleCount: Float = 2
+        let expectedLeftPower: Float = (
+            leftFirst * leftFirst + leftSecond * leftSecond
+        ) / sampleCount
+        let expectedRightPower: Float = (
+            rightFirst * rightFirst + rightSecond * rightSecond
+        ) / sampleCount
         XCTAssertEqual(powers.left, expectedLeftPower, accuracy: 0.000_001)
         XCTAssertEqual(powers.right, expectedRightPower, accuracy: 0.000_001)
     }
