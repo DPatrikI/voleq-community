@@ -81,8 +81,9 @@ No virtual audio driver or permanent system-wide output-device change is require
 - The optimized mild-suppression build was physically accepted on 2026-08-02 across MacBook speakers, Sennheiser HDB 630, and Apple AirPods Pro 2. The owner covered clean and noisy speech, quiet/loud transitions, microphone bumps, instrumental music, stereo image, an A/B suppression comparison during development, clicks/dropouts, and route restoration. Deterministic tests cover 48↔44.1 kHz and 48→16 kHz paths, but broader headset compatibility, meeting apps, the documented soak, and long-running stability still need structured validation.
 - The current mixed-stream processor levels the combined incoming audio. It cannot identify individual meeting participants or keep a separate profile for each speaker.
 - Singing can be classified as speech and may therefore receive quiet-speech leveling and mild suppression.
+- The validated speech route matrix is 16, 44.1, and 48 kHz. A known fractional 10 ms cadence issue at 22.05 kHz remains pre-existing and outside the supported matrix.
 - Speech-aware leveling uses 30 ms total DSP latency at 48 kHz so the pinned RNNoise build's two-block wet reconstruction is aligned correctly for mild suppression. Measured Speex resampler delay raises that total to 33.0 ms at 16 kHz and about 31.13 ms at 44.1 kHz. The leveler's accepted 20 ms loud-onset lookahead remains intact inside that timeline. Turning speech awareness off uses the base leveler's 20 ms timeline.
-- The required 48 kHz stereo release benchmark now records 4.33%–4.37% of one core across five post-review runs on the development Mac, passing the unchanged 5% target. Owner listening of the optimized build has passed; the documented soak remains pending and automated CPU evidence does not replace it.
+- The required 48 kHz stereo release benchmark passed all five final post-review runs at 4.49%–4.54% of one core on the development Mac, against five clean-master runs at 4.30%–4.41%; both remain below the unchanged 5% target. Owner listening of the optimized build has passed; the documented soak remains pending and automated CPU evidence does not replace it.
 
 ## Repository map
 
@@ -90,7 +91,11 @@ No virtual audio driver or permanent system-wide output-device change is require
 apps/macos/community/     Community macOS app and bundle resources
 packages/core/swift/      Platform-neutral product settings and types
 packages/dsp/swift/       Platform-neutral speech-leveling DSP
+                          DynamicsProcessor plus internal detector,
+                          lookahead, speech-coordination, and mixer types
 packages/speech/swift/    Offline speech-analysis API and RNNoise adapter
+                          RNNoiseStereoProcessor plus internal inference,
+                          resampler, tagged-history, decision-history, and FIFO types
 platforms/macos/          Core Audio capture and output adapter
 third_party/              Pinned RNNoise and SpeexDSP source subsets
 scripts/                  Developer build helpers

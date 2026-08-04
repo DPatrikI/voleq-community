@@ -139,7 +139,7 @@ Automated coverage:
 | Menu-bar brand image | Unit tests verify the committed template raster and intrinsic 18-by-18-point `NSImage` size |
 | Processing-failure status | Regression tests verify route and process refreshes preserve unrelated failure diagnostics |
 | Release resources | The macOS build verifies generated-asset drift, packaged image decoding, the property list, and the ad-hoc signature |
-| Developer environment checks / Swift tests | 5 / 131 passed |
+| Developer environment checks / Swift tests | 5 / 139 passed |
 
 The full-color application icon and monochrome status-item mark are generated
 deterministically from the original VolEq premium Android icon layers. The
@@ -153,7 +153,7 @@ requirement.
 
 ## Mild noise suppression
 
-Automated status: 131 Swift tests pass on 2026-08-03, including authorization,
+Automated status: 139 Swift tests pass on 2026-08-04, including authorization,
 right-only, anti-phase, reset, allocation, 30 ms latency, real-model marker
 alignment, noise reduction, speech projection, stereo balance, and clean-speech
 transparency. Five final CPU runs pass the unchanged 5% gate. Owner listening of
@@ -163,10 +163,10 @@ acceptance remains pending.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 131 passed |
+| Developer environment checks / Swift tests | 5 / 139 passed |
 | Speech-aware / suppression coupling | The enabled route always prepares stereo suppression for direct and converted paths; disabling speech awareness skips both mono and stereo speech-processor construction and retains base-leveler sample parity |
 | Shared immutable model and independent L/R RNNoise state | Passed |
-| Ordered-float equivalence | Accepted snapshot remains exact; a 1,000-block stereo/right-only/anti-phase differential stream is bit-exact for events, matching-channel power, probability, SNR metadata, and every L/R wet sample in debug and release-optimized builds, including probability within 0.00038 of an activity boundary |
+| Ordered-float equivalence | Accepted snapshot remains exact; a 1,000-block stereo/right-only/anti-phase differential stream is bit-exact for events, matching-channel power, probability, SNR metadata, and every L/R wet sample across the supported 16 / 44.1 / 48 kHz routes. The 48 kHz fixture retains the close-boundary assertion of ≤0.001; the recorded 48 kHz run observed 0.00038 |
 | Max-channel probability with matching channel power drives linked decisions | Passed against two independent mono states |
 | 18 / 21 / 24 dB SNR taper | 50% / 25% / 0% wet |
 | Wet transition timing | 30 ms fade in / 100 ms fade out; bounded per-sample slope |
@@ -182,7 +182,7 @@ acceptance remains pending.
 | Existing lookahead, limiter, downward compression, stereo linking, converted routes, 48→16 kHz call mode, cadence, and content-analysis rates | Passed |
 | Strict-concurrency build with warnings as errors | Passed |
 | Independent RNNoise wet alignment review | Finding fixed: main reconstruction is tagged `k - 2`; exact source-block markers and zero-lag seeded broadband correlation pass at all supported rates |
-| 48 kHz stereo release benchmark | **Passed target:** five post-review recorded runs at 4.33% / 4.37% / 4.35% / 4.35% / 4.34% of one core; every run ≤5% |
+| 48 kHz stereo release benchmark | **Passed target:** final post-review runs at 4.54% / 4.49% / 4.51% / 4.51% / 4.51% of one core; every run ≤5% |
 | Release app, ad-hoc signature, property list, and patch whitespace | Passed |
 
 The implementation's reported DSP latency includes measured Speex input and
@@ -193,6 +193,11 @@ output delay:
 | 16 kHz | 24 / 24 frames | 528 frames / 33.0 ms |
 | 44.1 kHz | 24 / 26 frames | 1,373 frames / about 31.13 ms |
 | 48 kHz | none | 1,440 frames / 30.0 ms |
+
+The validated speech route matrix is 16, 44.1, and 48 kHz. A known fractional
+10 ms cadence issue at 22,050 Hz is pre-existing and remains outside the
+supported matrix; this architecture-only refactor does not silently repair or
+promote that route.
 
 RNNoise source inspection and an independent impulse check showed output block
 0 silent, output block 1 about 34 dB below the main reconstruction, and the main
@@ -238,16 +243,22 @@ using RNNoise's bundled int8 weights reached 4.13% but was rejected: comparison
 showed up to 0.706 probability, 13.5 dB SNR, and 0.0413 normalized-sample drift.
 No quantized weights remain in the optimized path.
 
-Final post-review evidence, after one discarded 4.38% warm-up, was 4.33%, 4.37%,
-4.35%, 4.35%, and 4.34% (2.601 / 2.621 / 2.608 / 2.610 / 2.605 thread-CPU
-seconds). Median was 4.35%, minimum 4.33%, maximum 4.37%, and spread 0.04
-percentage point (about 0.92% of the median). Every recorded run passes the
-unchanged 5% gate; the median improvement from baseline is about 70.8%. In the final `sample` run,
-the paired float matrix kernel remained dominant (1,198 top-of-stack samples),
-followed by pitch correlation (85), FFT (73), pitch search (36), and pitch
-de-doubling (24). Swift TLS bookkeeping fell to 18 samples, with dynamics,
-copying, and wrapper work smaller still. The profiled benchmark itself measured
-4.51%; it is profiling evidence and is kept separate from the canonical gate set.
+The final post-review canonical set on 2026-08-04 measured 4.54%, 4.49%,
+4.51%, 4.51%, and 4.51% (2.726 / 2.697 / 2.704 / 2.705 / 2.708 thread-CPU
+seconds). Median was 4.51%, minimum 4.49%, maximum 4.54%, and spread 0.05
+percentage point. Every recorded run passes the unchanged 5% gate. No new
+Instruments or physical-listening result is claimed for this architecture-only
+refactor; the prior accepted listening and profiling records remain separate
+historical evidence.
+
+Refactor comparison evidence collected on 2026-08-04 used the same release
+fixture and hardware. Five clean-master runs at `1e8076c` measured 4.30%,
+4.41%, 4.31%, 4.39%, and 4.37% (mean 4.356%); five final post-review runs
+measured 4.54%, 4.49%, 4.51%, 4.51%, and 4.51% (mean 4.512%). The unchanged 5% gate
+passed in every run. The accepted deterministic RNNoise snapshot and the
+existing 1,000-block scalar-versus-paired differential stream also passed both
+states; no new physical listening or soak evidence is claimed for this
+architecture-only change.
 
 ### Physical listening evidence
 
