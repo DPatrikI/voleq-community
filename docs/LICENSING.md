@@ -27,6 +27,11 @@ derivation, and generated outputs are documented in
 `apps/macos/community/Resources/AppIconSource/README.md`; use and redistribution
 remain subject to `TRADEMARKS.md`.
 
+Official screenshots and branded release artifacts are documentation assets,
+not an implied open-content or trademark license. Their limited reproduction
+permission and the rules for modified builds are also defined in
+`TRADEMARKS.md`.
+
 ## Third-party material
 
 Dependencies, test fixtures, icons, fonts, and sample audio must have compatible, documented provenance before they are committed. Do not add copyrighted meeting recordings or unclear audio samples. Prefer original synthetic fixtures or CC0 material.

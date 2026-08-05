@@ -1,6 +1,11 @@
 # Security policy
 
-VolEq is pre-release software and does not yet publish a supported-version matrix.
+## Supported versions
+
+| Version | Supported |
+| --- | --- |
+| Latest `0.1.x` release | Yes |
+| Older or unreleased builds | No |
 
 Do not open a public issue for a vulnerability that could expose captured audio, bypass permissions, create persistent feedback, or affect system integrity. Report it privately through GitHub's private vulnerability reporting feature when enabled, or contact the repository owner through the method listed on their GitHub profile.
 

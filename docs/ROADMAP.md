@@ -2,41 +2,31 @@
 
 ## 0.1 — Community foundation
 
-- establish repository, package, licensing, and contribution boundaries;
-- preserve a command-line build of a proper macOS application;
-- provide the minimal Community interface;
-- maintain deterministic DSP tests.
+- [x] Establish repository, package, licensing, and contribution boundaries.
+- [x] Preserve a command-line build of a proper macOS application.
+- [x] Provide the minimal Community interface.
+- [x] Maintain deterministic DSP tests.
+- [x] Add Developer ID signing, notarization, and a dependency-free DMG release
+  workflow.
 
-## Validation before a public release
+## 0.1 release validation
 
-- [Implemented; validated on Sennheiser HDB 630 and Apple AirPods Pro 2] Handle synchronized and converted headset paths in regular playback and call mode with the microphone active. Live profile switching while VolEq remains active and broader device coverage remain pending;
-- [Implemented; automated validation and revised preset acceptance complete, device matrix pending] Add 20 ms lookahead peak protection and restrained loud-origin reduction without exposing advanced Community controls;
-- [Implemented; automated validation plus quiet-speech and instrumental-music
-  MacBook listening accepted, broader device matrix pending] Gate upward
-  leveling with fully offline speech probability, a learned noise floor, and a
-  macOS system-classifier content check;
-- [Implemented and merged; 139 automated tests, optimized CPU gate, and owner
-  listening on MacBook speakers plus two Bluetooth devices pass; soak and broader
-  device matrix pending] Reuse stereo RNNoise
-  output for automatic mild suppression only
-  during authorized noisy speech whenever speech-aware leveling is enabled. The
-  measured 48 kHz stereo cost is 4.49%–4.54% of one core across five post-review release
-  runs on the development Mac, within the 5% target. The owner accepted 30 ms
-  at 48 kHz on 2026-07-31 so the
-  pinned RNNoise two-block wet reconstruction can be aligned without changing
-  its source;
-- test real Teams, Zoom, Meet, and browser-based sessions;
-- test wired output and additional Bluetooth devices;
-- test output switching, process disappearance, sleep/wake, and permission recovery;
-- measure memory behavior and complete the documented 30-minute soak;
-- run repeatable loud/quiet speech fixtures and blind A/B listening checks;
-- document confirmed compatibility without overstating untested environments.
+Complete for v0.1.0. Automated checks cover lookahead, speech classification,
+suppression, conversion, failure recovery, callback allocation, resources, and
+the 5% CPU gate. Owner-run physical validation covers M1 and M4 MacBook Pros,
+Teams, Zoom, Google Meet in Safari, built-in and wired output, AirPods Pro 2,
+Sennheiser HDB 630, regular and microphone-active Bluetooth modes, lifecycle
+recovery, UI/accessibility states, and sessions exceeding eight hours.
+
+The exact tested scope and explicit non-claims are recorded in
+[COMPATIBILITY.md](COMPATIBILITY.md); automated and physical evidence remain
+separate in [VALIDATION.md](VALIDATION.md).
 
 ## Later Community work
 
 - harden device and process lifecycle handling;
 - add deterministic audio fixtures and regression metrics;
-- add accessible status and recovery guidance;
+- continue accessibility and recovery-guidance refinement;
 - add platform adapters only when they can be maintained and tested.
 
 ## Premium exploration

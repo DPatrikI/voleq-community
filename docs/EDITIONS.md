@@ -28,7 +28,7 @@ The planned private repository may add separate proprietary files for:
 - automatic app selection, output-device preferences, and routing policies;
 - profiles and per-app preferences;
 - import/export, advanced exportable diagnostics, and guided recovery;
-- signed/notarized or App Store distribution;
+- Mac App Store distribution, if the audio topology can satisfy sandbox rules;
 - commercial support and managed integrations.
 
 Premium should consume tagged public packages rather than copying them. Changes made to MPL-covered files remain governed by MPL-2.0. Separate Premium files can use a proprietary license when they form a Larger Work in compliance with MPL-2.0.

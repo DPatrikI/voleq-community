@@ -14,10 +14,15 @@ icon and menu-bar template under `apps/macos/community/Resources`. Their
 presence in the source repository does not place them under the repository's
 MPL-2.0 license.
 
+Official screenshots and other branded release or documentation artifacts are
+covered by the same policy. Their presence in the repository, release notes, or
+project documentation does not grant trademark rights or permission to present
+a modified product as an official VolEq build.
+
 Copyright © 2026 Patrik Dóczy. Permission is granted to reproduce and
-redistribute these listed assets, without modification, as part of an unmodified
-official VolEq Community source checkout or source archive, and as included in a
-build produced from that unmodified official source. This permission does not
-grant a right to use the assets separately, to brand modified builds or forks,
-or to imply project endorsement. Contact the repository owner for any other use,
-including commercial branding use.
+redistribute these listed assets and official screenshots, without
+modification, as part of an unmodified official VolEq Community source
+checkout, source archive, build, or factual reference to the official project.
+This permission does not grant a right to use the assets separately, to brand
+modified builds or forks, or to imply project endorsement. Contact the
+repository owner for any other use, including commercial branding use.
