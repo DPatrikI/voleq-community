@@ -35,18 +35,14 @@ public final class RNNoiseStereoProcessor: StereoSpeechProcessing, @unchecked Se
         model: RNNoiseModelResource,
         usesOptimizedPairedInference: Bool
     ) throws {
-        guard sampleRate.isFinite,
-              sampleRate >= 8_000,
-              sampleRate <= 192_000,
-              sampleRate.rounded() == sampleRate else {
-            throw SpeechAnalyzerError.unsupportedSampleRate(sampleRate)
-        }
+        let blockFrameCount = try RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+            for: sampleRate
+        )
         let rnnoiseFrameCount = Int(rnnoise_get_frame_size())
         guard rnnoiseFrameCount == RNNoiseInferenceEngine.analysisFrameCount else {
             throw SpeechAnalyzerError.unexpectedFrameSize(rnnoiseFrameCount)
         }
 
-        let blockFrameCount = Int((sampleRate * 0.010).rounded())
         let preparedResampler = try RNNoiseResampler(
             sampleRate: sampleRate,
             sourceBlockFrameCount: blockFrameCount

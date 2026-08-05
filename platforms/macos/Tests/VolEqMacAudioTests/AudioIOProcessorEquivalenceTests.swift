@@ -2,6 +2,7 @@
 
 import VolEqCore
 import VolEqDSP
+import VolEqSpeech
 import XCTest
 @testable import VolEqMacAudio
 
@@ -37,6 +38,47 @@ final class AudioIOProcessorEquivalenceTests: AudioPipelineTestCase {
         ) { error in
             XCTAssertEqual(error as? TestSpeechFailure, .startup)
         }
+    }
+
+    func testFractionalFixedBlockRateStopsAudioIOConstructionBeforeSpeechFactoriesRun() {
+        let fractionalFormat = floatFormat(sampleRate: 22_050, channelCount: 2)
+        var factoryCalls = 0
+
+        XCTAssertThrowsError(
+            try AudioIOProcessor(
+                inputFormat: fractionalFormat,
+                outputFormat: fractionalFormat,
+                settings: neutralSettings(),
+                speechAnalyzerFactory: { _ in
+                    factoryCalls += 1
+                    return PendingSpeechAnalyzer(sampleRate: 48_000)
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SpeechAnalyzerError,
+                .unsupportedSampleRate(22_050)
+            )
+        }
+        XCTAssertEqual(factoryCalls, 0)
+    }
+
+    func testDisablingSpeechAwarenessRetainsBaseLevelingAtFractionalFixedBlockRate() throws {
+        let fractionalFormat = floatFormat(sampleRate: 22_050, channelCount: 2)
+        let processor = try AudioIOProcessor(
+            inputFormat: fractionalFormat,
+            outputFormat: fractionalFormat,
+            settings: neutralSettings(),
+            speechAwarenessEnabled: false,
+            speechAnalyzerFactory: { _ in
+                XCTFail("Speech analyzer must not be constructed when disabled")
+                return PendingSpeechAnalyzer(sampleRate: 48_000)
+            }
+        )
+
+        XCTAssertFalse(processor.usesSampleRateConversion)
+        XCTAssertEqual(processor.inputSampleRate, 22_050)
+        XCTAssertEqual(processor.outputSampleRate, 22_050)
     }
 
     func testDisablingSpeechAwarenessSkipsAllSpeechProcessorConstruction() throws {

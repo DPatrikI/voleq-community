@@ -59,10 +59,15 @@ independent channel inference, failure latching, and zero steady-state
 callback allocations. Their internal boundaries are implementation details;
 the public processor API and latency policy do not change.
 
-The validated route matrix remains 16, 44.1, and 48 kHz. The known fractional
-10 ms cadence issue at 22,050 Hz is pre-existing and remains outside the
-supported matrix; this architecture-only refactor does not silently repair or
-promote that route.
+The validated route matrix remains 16, 44.1, and 48 kHz. Fixed-block speech
+analysis accepts only finite, whole-number source rates in the 8–192 kHz safe
+range for which 10 ms contains a whole number of frames (integer rates
+divisible by 100). It rejects 22,050 Hz and other fractional-block rates on the
+control thread before any processing starts. The macOS adapter preflights the
+output rate before creating its muting tap, and tears down any later-created
+tap or aggregate resources if the callback rate fails the same rule. The
+original audio path remains intact. Alternating fractional-cadence support is
+not part of v0.1.0.
 
 On Apple Silicon, the internal RNNoise adapter evaluates the two states through
 a paired float kernel covering sparse GRU and dense/conv layers. It shares

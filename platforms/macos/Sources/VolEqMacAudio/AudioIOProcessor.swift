@@ -58,6 +58,14 @@ final class AudioIOProcessor {
         inputSampleRate = inputFormat.mSampleRate
         outputSampleRate = outputFormat.mSampleRate
         if speechAwarenessEnabled {
+            // Reject both possible processing clocks on the control thread
+            // before analysis, conversion, or callback resources exist.
+            _ = try RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+                for: outputFormat.mSampleRate
+            )
+            _ = try RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+                for: inputFormat.mSampleRate
+            )
             let directContentAnalyzer: (any AudioContentAnalyzing)?
             let conversionContentAnalyzer: (any AudioContentAnalyzing)?
             if let contentAnalyzerFactory {

@@ -46,6 +46,43 @@ final class RNNoiseSpeechAnalyzerTests: XCTestCase {
         }
     }
 
+    func testFixedBlockRateRuleAcceptsValidatedRoutesWithUnchangedBlockSizes() throws {
+        let expectedBlockSizes = [
+            (16_000.0, 160),
+            (44_100.0, 441),
+            (48_000.0, 480)
+        ]
+        for (sampleRate, expectedBlockSize) in expectedBlockSizes {
+            XCTAssertEqual(
+                try RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(for: sampleRate),
+                expectedBlockSize
+            )
+            let analyzer = try RNNoiseSpeechAnalyzer(sampleRate: sampleRate, model: Self.sharedModel)
+            XCTAssertEqual(analyzer.sourceBlockFrameCount, expectedBlockSize)
+        }
+    }
+
+    func testFixedBlockRateRuleRejectsFractionalTenMillisecondRatesBeforeAnalysis() {
+        for sampleRate in [11_025.0, 22_050.0, 44_050.0, 44_100.5] {
+            XCTAssertThrowsError(
+                try RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(for: sampleRate)
+            ) { error in
+                XCTAssertEqual(
+                    error as? SpeechAnalyzerError,
+                    .unsupportedSampleRate(sampleRate)
+                )
+            }
+            XCTAssertThrowsError(
+                try RNNoiseSpeechAnalyzer(sampleRate: sampleRate, model: Self.sharedModel)
+            ) { error in
+                XCTAssertEqual(
+                    error as? SpeechAnalyzerError,
+                    .unsupportedSampleRate(sampleRate)
+                )
+            }
+        }
+    }
+
     func testFrameAccountingAndLongStreamDriftAtSupportedRates() throws {
         for sampleRate in [16_000.0, 44_100.0, 48_000.0] {
             let analyzer = try RNNoiseSpeechAnalyzer(sampleRate: sampleRate, model: Self.sharedModel)

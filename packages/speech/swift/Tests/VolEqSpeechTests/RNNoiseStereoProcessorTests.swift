@@ -8,15 +8,29 @@ final class RNNoiseStereoProcessorTests: XCTestCase {
 
     func testMeasuredLatencyAtSupportedRates() throws {
         let expected = [
-            (16_000.0, 24, 24, 528),
-            (44_100.0, 24, 26, 1_373),
-            (48_000.0, 0, 0, 1_440)
+            (16_000.0, 160, 24, 24, 528),
+            (44_100.0, 441, 24, 26, 1_373),
+            (48_000.0, 480, 0, 0, 1_440)
         ]
-        for (rate, inputLatency, outputLatency, processingLatency) in expected {
+        for (rate, blockFrameCount, inputLatency, outputLatency, processingLatency) in expected {
             let processor = try RNNoiseStereoProcessor(sampleRate: rate, model: Self.model)
+            XCTAssertEqual(processor.sourceBlockFrameCount, blockFrameCount)
             XCTAssertEqual(processor.inputResamplerLatencyFrameCount, inputLatency)
             XCTAssertEqual(processor.outputResamplerLatencyFrameCount, outputLatency)
             XCTAssertEqual(processor.processingLatencyFrameCount, processingLatency)
+        }
+    }
+
+    func testFixedBlockRateRuleRejectsFractionalTenMillisecondRatesBeforeProcessing() {
+        for sampleRate in [11_025.0, 22_050.0, 44_050.0] {
+            XCTAssertThrowsError(
+                try RNNoiseStereoProcessor(sampleRate: sampleRate, model: Self.model)
+            ) { error in
+                XCTAssertEqual(
+                    error as? SpeechAnalyzerError,
+                    .unsupportedSampleRate(sampleRate)
+                )
+            }
         }
     }
 
