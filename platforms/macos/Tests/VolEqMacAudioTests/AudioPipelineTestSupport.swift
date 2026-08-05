@@ -110,7 +110,9 @@ final class PendingSpeechAnalyzer: SpeechAnalyzing {
 
     init(sampleRate: Double) {
         sourceSampleRate = sampleRate
-        sourceBlockFrameCount = max(Int((sampleRate * 0.010).rounded()), 1)
+        sourceBlockFrameCount = try! RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+            for: sampleRate
+        )
     }
 
     func processMonoSample(_: Float) -> SpeechAnalysisEvent { .pending }

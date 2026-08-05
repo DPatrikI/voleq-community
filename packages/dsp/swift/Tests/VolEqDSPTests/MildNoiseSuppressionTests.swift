@@ -524,7 +524,9 @@ private final class ScriptedStereoSpeechProcessor: StereoSpeechProcessing {
         wetGenerator: @escaping (Int64, Int) -> Float
     ) {
         sourceSampleRate = sampleRate
-        sourceBlockFrameCount = Int((sampleRate * 0.010).rounded())
+        sourceBlockFrameCount = try! RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+            for: sampleRate
+        )
         decisionLatencyFrameCount = sourceBlockFrameCount
         processingLatencyFrameCount = sourceBlockFrameCount * 2
         self.probability = probability

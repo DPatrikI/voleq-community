@@ -180,6 +180,63 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
 
     @available(macOS 14.2, *)
     @MainActor
+    func testRejectedSpeechStartupCleansUpBeforeAnyCallbackCanStartAndIsSafeToStopOrRetry() {
+        var cleanupCount = 0
+        var startAttemptCount = 0
+        var teardownSteps: [AudioCaptureTeardownStep] = []
+        let controller = AudioCaptureController(
+            installSystemObservers: false,
+            stopResourcesDidRun: { cleanupCount += 1 },
+            startPipelineOverride: { controller in
+                startAttemptCount += 1
+                controller._testOnlySimulatePartiallyPreparedCaptureResources()
+                throw SpeechAnalyzerError.unsupportedSampleRate(22_050)
+            },
+            teardownStepRecorder: { teardownSteps.append($0) }
+        )
+
+        controller.start()
+        XCTAssertEqual(startAttemptCount, 1)
+        XCTAssertEqual(cleanupCount, 1)
+        XCTAssertEqual(teardownSteps, [
+            .activeOutputListeners,
+            .stopIOProc,
+            .destroyIOProc,
+            .destroyAggregate,
+            .destroyTap
+        ])
+        XCTAssertTrue(controller._testOnlyCaptureResourcesAreInactive())
+        XCTAssertFalse(controller.isRunning)
+        XCTAssertEqual(controller.runtimeState, .failed)
+        XCTAssertTrue(controller.status.contains("Speech-aware processing does not support"))
+        XCTAssertTrue(controller.status.contains("Original audio remains available"))
+
+        controller.stop()
+        controller.stop()
+        XCTAssertEqual(cleanupCount, 3)
+        XCTAssertEqual(teardownSteps.count, 5)
+        XCTAssertTrue(controller._testOnlyCaptureResourcesAreInactive())
+        XCTAssertFalse(controller.isRunning)
+        XCTAssertEqual(controller.runtimeState, .stopped)
+
+        controller.start()
+        XCTAssertEqual(startAttemptCount, 2)
+        XCTAssertEqual(cleanupCount, 4)
+        XCTAssertEqual(teardownSteps.count, 10)
+        XCTAssertEqual(Array(teardownSteps.suffix(5)), [
+            .activeOutputListeners,
+            .stopIOProc,
+            .destroyIOProc,
+            .destroyAggregate,
+            .destroyTap
+        ])
+        XCTAssertTrue(controller._testOnlyCaptureResourcesAreInactive())
+        XCTAssertFalse(controller.isRunning)
+        XCTAssertEqual(controller.runtimeState, .failed)
+    }
+
+    @available(macOS 14.2, *)
+    @MainActor
     func testSuccessfulRefreshClearsOnlyAProcessEnumerationFailure() {
         enum RefreshFailure: Error { case unavailable }
         var shouldFail = true
@@ -236,7 +293,7 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
             installSystemObservers: false,
             initiallyRunning: true,
             stopResourcesDidRun: { stopCount += 1 },
-            startPipelineOverride: {
+            startPipelineOverride: { _ in
                 do {
                     let newFormat = self.floatFormat(sampleRate: 16_000, channelCount: 2)
                     let newProcessor = try AudioIOProcessor(

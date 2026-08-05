@@ -48,17 +48,10 @@ public final class RNNoiseSpeechAnalyzer: SpeechAnalyzing, @unchecked Sendable {
     private var failed = false
 
     public init(sampleRate: Double, model: RNNoiseModelResource) throws {
-        guard sampleRate.isFinite,
-              sampleRate >= 8_000,
-              sampleRate <= 192_000,
-              sampleRate.rounded() == sampleRate else {
-            throw SpeechAnalyzerError.unsupportedSampleRate(sampleRate)
-        }
+        let blockFrameCount = try RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+            for: sampleRate
+        )
         let sourceRate = UInt32(sampleRate)
-        let blockFrameCount = Int((sampleRate * 0.010).rounded())
-        guard blockFrameCount > 0 else {
-            throw SpeechAnalyzerError.unsupportedSampleRate(sampleRate)
-        }
         let rnnoiseFrameCount = Int(rnnoise_get_frame_size())
         guard rnnoiseFrameCount == Self.analysisFrameCount else {
             throw SpeechAnalyzerError.unexpectedFrameSize(rnnoiseFrameCount)

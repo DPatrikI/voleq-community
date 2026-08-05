@@ -318,7 +318,9 @@ private final class ImmediateFailingStereoSpeechProcessor: StereoSpeechProcessin
 
     init(sampleRate: Double) {
         sourceSampleRate = sampleRate
-        sourceBlockFrameCount = max(Int((sampleRate * 0.010).rounded()), 1)
+        sourceBlockFrameCount = try! RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+            for: sampleRate
+        )
         decisionLatencyFrameCount = sourceBlockFrameCount
         processingLatencyFrameCount = sourceBlockFrameCount * 3
     }

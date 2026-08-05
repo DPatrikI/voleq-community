@@ -4,6 +4,7 @@ import AppKit
 import CoreAudio
 import Foundation
 import VolEqCore
+import VolEqSpeech
 
 public struct AudioProcess: Identifiable, Hashable {
     public let id: AudioObjectID
@@ -30,6 +31,14 @@ public enum CaptureRuntimeState: Equatable, Sendable {
     case active
     case recovering
     case failed
+}
+
+enum AudioCaptureTeardownStep: Equatable {
+    case activeOutputListeners
+    case stopIOProc
+    case destroyIOProc
+    case destroyAggregate
+    case destroyTap
 }
 
 @MainActor
@@ -60,10 +69,13 @@ public final class AudioCaptureController: ObservableObject {
     private var routeRecoveryTask: Task<Void, Never>?
     private var processingDiagnosticsTask: Task<Void, Never>?
     private let stopResourcesDidRun: (() -> Void)?
-    private let startPipelineOverride: (@MainActor () -> Void)?
+    private let startPipelineOverride: (@MainActor (AudioCaptureController) throws -> Void)?
+    private let teardownStepRecorder: ((AudioCaptureTeardownStep) -> Void)?
     private let loadProcessesOverride: (@MainActor () throws -> [AudioProcess])?
     private let routeRecoveryDelayNanoseconds: UInt64
     private var processRefreshFailed = false
+    private var ioCallbackStarted = false
+    private var testOnlyHasSimulatedIOProc = false
     private let ioQueue = DispatchQueue(
         label: "com.patrikistvandoczy.voleq.community.audio",
         qos: .userInteractive
@@ -81,7 +93,8 @@ public final class AudioCaptureController: ObservableObject {
         installSystemObservers: Bool,
         initiallyRunning: Bool = false,
         stopResourcesDidRun: (() -> Void)? = nil,
-        startPipelineOverride: (@MainActor () -> Void)? = nil,
+        startPipelineOverride: (@MainActor (AudioCaptureController) throws -> Void)? = nil,
+        teardownStepRecorder: ((AudioCaptureTeardownStep) -> Void)? = nil,
         loadProcessesOverride: (@MainActor () throws -> [AudioProcess])? = nil,
         routeRecoveryDelayNanoseconds: UInt64 = 350_000_000
     ) {
@@ -89,6 +102,7 @@ public final class AudioCaptureController: ObservableObject {
         runtimeState = initiallyRunning ? .active : .stopped
         self.stopResourcesDidRun = stopResourcesDidRun
         self.startPipelineOverride = startPipelineOverride
+        self.teardownStepRecorder = teardownStepRecorder
         self.loadProcessesOverride = loadProcessesOverride
         self.routeRecoveryDelayNanoseconds = routeRecoveryDelayNanoseconds
         if installSystemObservers {
@@ -207,13 +221,12 @@ public final class AudioCaptureController: ObservableObject {
 
     private func startPipeline() {
         runtimeState = .preparing
-        if let startPipelineOverride {
-            startPipelineOverride()
-            return
-        }
-        stopResources()
-
         do {
+            if let startPipelineOverride {
+                try startPipelineOverride(self)
+                return
+            }
+            stopResources()
             // Verify the local model before a muting process tap exists. Analyzer
             // and resampler states are then prepared before AudioDeviceStart.
             let speechModel = speechAwarenessEnabled
@@ -224,6 +237,16 @@ public final class AudioCaptureController: ObservableObject {
                 objectID: outputDeviceID,
                 selector: kAudioDevicePropertyDeviceUID
             )
+            if speechAwarenessEnabled {
+                let outputFormat: AudioStreamBasicDescription = try readValue(
+                    objectID: outputDeviceID,
+                    selector: kAudioDevicePropertyStreamFormat,
+                    scope: kAudioDevicePropertyScopeOutput
+                )
+                _ = try RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+                    for: outputFormat.mSampleRate
+                )
+            }
             try installActiveOutputListeners(for: outputDeviceID)
 
             let description = CATapDescription()
@@ -333,6 +356,7 @@ public final class AudioCaptureController: ObservableObject {
                 AudioDeviceStart(aggregateDeviceID, ioProcID),
                 "Start audio processing"
             )
+            ioCallbackStarted = true
 
             isRunning = true
             runtimeState = .active
@@ -352,7 +376,7 @@ public final class AudioCaptureController: ObservableObject {
             stopResources()
             isRunning = false
             runtimeState = .failed
-            status = error.localizedDescription
+            status = startupFailureStatus(for: error)
         }
     }
 
@@ -369,22 +393,50 @@ public final class AudioCaptureController: ObservableObject {
         processingDiagnosticsTask?.cancel()
         processingDiagnosticsTask = nil
         removeActiveOutputListeners()
-        if aggregateDeviceID != kAudioObjectUnknown, let ioProcID {
-            AudioDeviceStop(aggregateDeviceID, ioProcID)
-            AudioDeviceDestroyIOProcID(aggregateDeviceID, ioProcID)
+        if aggregateDeviceID != kAudioObjectUnknown,
+           let ioProcID {
+            if let teardownStepRecorder {
+                teardownStepRecorder(.stopIOProc)
+                teardownStepRecorder(.destroyIOProc)
+            } else {
+                AudioDeviceStop(aggregateDeviceID, ioProcID)
+                AudioDeviceDestroyIOProcID(aggregateDeviceID, ioProcID)
+            }
+        } else if aggregateDeviceID != kAudioObjectUnknown,
+                  testOnlyHasSimulatedIOProc,
+                  let teardownStepRecorder {
+            teardownStepRecorder(.stopIOProc)
+            teardownStepRecorder(.destroyIOProc)
         }
         ioProcID = nil
+        testOnlyHasSimulatedIOProc = false
+        ioCallbackStarted = false
 
         if aggregateDeviceID != kAudioObjectUnknown {
-            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            if let teardownStepRecorder {
+                teardownStepRecorder(.destroyAggregate)
+            } else {
+                AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            }
             aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
         }
         if tapID != kAudioObjectUnknown {
-            AudioHardwareDestroyProcessTap(tapID)
+            if let teardownStepRecorder {
+                teardownStepRecorder(.destroyTap)
+            } else {
+                AudioHardwareDestroyProcessTap(tapID)
+            }
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
         audioProcessor = nil
         stopResourcesDidRun?()
+    }
+
+    private func startupFailureStatus(for error: Error) -> String {
+        guard case SpeechAnalyzerError.unsupportedSampleRate = error else {
+            return error.localizedDescription
+        }
+        return "Speech-aware processing does not support the current audio sample rate. Original audio remains available. Turn off Speech-aware leveling to use base leveling."
     }
 
     private func scheduleProcessingDiagnostics(
@@ -503,13 +555,17 @@ public final class AudioCaptureController: ObservableObject {
             activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
             return
         }
-        for var address in activeOutputListenerAddresses {
-            AudioObjectRemovePropertyListenerBlock(
-                activeOutputDeviceID,
-                &address,
-                routeQueue,
-                activeOutputListener
-            )
+        if let teardownStepRecorder {
+            teardownStepRecorder(.activeOutputListeners)
+        } else {
+            for var address in activeOutputListenerAddresses {
+                AudioObjectRemovePropertyListenerBlock(
+                    activeOutputDeviceID,
+                    &address,
+                    routeQueue,
+                    activeOutputListener
+                )
+            }
         }
         activeOutputListenerAddresses.removeAll(keepingCapacity: true)
         activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
@@ -540,6 +596,28 @@ public final class AudioCaptureController: ObservableObject {
     }
 
 #if DEBUG
+    func _testOnlySimulatePartiallyPreparedCaptureResources() {
+        activeOutputDeviceID = 101
+        activeOutputListener = { _, _ in }
+        activeOutputListenerAddresses = [
+            propertyAddress(kAudioDevicePropertyNominalSampleRate)
+        ]
+        aggregateDeviceID = 102
+        tapID = 103
+        testOnlyHasSimulatedIOProc = true
+    }
+
+    func _testOnlyCaptureResourcesAreInactive() -> Bool {
+        tapID == kAudioObjectUnknown
+            && aggregateDeviceID == kAudioObjectUnknown
+            && ioProcID == nil
+            && activeOutputDeviceID == kAudioObjectUnknown
+            && activeOutputListener == nil
+            && activeOutputListenerAddresses.isEmpty
+            && routeRecoveryTask == nil
+            && !ioCallbackStarted
+    }
+
     func _testOnlyHandleOutputRouteChange() {
         handleOutputRouteChange()
     }

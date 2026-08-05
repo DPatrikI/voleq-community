@@ -194,10 +194,12 @@ output delay:
 | 44.1 kHz | 24 / 26 frames | 1,373 frames / about 31.13 ms |
 | 48 kHz | none | 1,440 frames / 30.0 ms |
 
-The validated speech route matrix is 16, 44.1, and 48 kHz. A known fractional
-10 ms cadence issue at 22,050 Hz is pre-existing and remains outside the
-supported matrix; this architecture-only refactor does not silently repair or
-promote that route.
+The validated speech route matrix is 16, 44.1, and 48 kHz. Fixed-block speech
+analysis now rejects 22,050 Hz and other rates where 10 ms is not a whole
+number of source frames before processing starts. Unsupported speech-aware
+startup leaves the original audio path intact; fractional-cadence support is
+not part of v0.1.0. This is automated initialization and lifecycle coverage,
+not physical testing of a 22.05 kHz device.
 
 RNNoise source inspection and an independent impulse check showed output block
 0 silent, output block 1 about 34 dB below the main reconstruction, and the main

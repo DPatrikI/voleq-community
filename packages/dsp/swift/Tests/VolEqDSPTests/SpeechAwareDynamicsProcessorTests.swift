@@ -681,7 +681,9 @@ private final class ScriptedSpeechAnalyzer: SpeechAnalyzing {
         repeating: Entry? = nil
     ) {
         sourceSampleRate = sampleRate
-        sourceBlockFrameCount = Int((sampleRate * 0.010).rounded())
+        sourceBlockFrameCount = try! RNNoiseFixedBlockSampleRate.sourceBlockFrameCount(
+            for: sampleRate
+        )
         self.analysisLatencyFrameCount = analysisLatencyFrameCount ?? sourceBlockFrameCount
         self.script = script
         repeatingEntry = repeating
