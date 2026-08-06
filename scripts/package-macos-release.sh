@@ -11,6 +11,8 @@ NOTARIZATION_DIRECTORY="$RELEASE_DIRECTORY/notarization"
 NOTARY_PROFILE="${VOLEQ_NOTARY_PROFILE:-voleq-notary}"
 ARTIFACT_SUFFIX="${VOLEQ_RELEASE_SUFFIX:-}"
 
+source "$REPOSITORY_ROOT/scripts/lib/release-artifacts.zsh"
+
 fail() {
     echo "error: $1" >&2
     exit 1
@@ -29,6 +31,22 @@ SOURCE_COMMIT="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 if [[ -n "$ARTIFACT_SUFFIX" && ! "$ARTIFACT_SUFFIX" =~ '^[A-Za-z0-9][A-Za-z0-9.-]*$' ]]; then
     fail "VOLEQ_RELEASE_SUFFIX must contain only letters, numbers, periods, and hyphens"
 fi
+
+ARTIFACT_LABEL="VolEq-Community-$VERSION"
+if [[ -n "$ARTIFACT_SUFFIX" ]]; then
+    ARTIFACT_LABEL="$ARTIFACT_LABEL-$ARTIFACT_SUFFIX"
+fi
+DMG="$RELEASE_DIRECTORY/$ARTIFACT_LABEL-macOS-arm64.dmg"
+CHECKSUMS="$RELEASE_DIRECTORY/SHA256SUMS.txt"
+
+# A failed rerun must not leave an older candidate at the documented publish
+# paths or pair it with evidence from a newer source commit.
+voleq_invalidate_release_outputs \
+    "$RELEASE_DIRECTORY" \
+    "$DMG" \
+    "$CHECKSUMS" \
+    "$NOTARIZATION_DIRECTORY" \
+    || fail "could not invalidate previous release outputs"
 
 SIGNING_IDENTITY="${VOLEQ_SIGNING_IDENTITY:-}"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
@@ -59,7 +77,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$RELEASE_DIRECTORY" "$NOTARIZATION_DIRECTORY"
 cat > "$NOTARIZATION_DIRECTORY/build-metadata.txt" <<EOF
 source_commit=$SOURCE_COMMIT
 version=$VERSION
@@ -127,14 +144,6 @@ STAGING_DIRECTORY="$WORK_DIRECTORY/dmg-root"
 mkdir -p "$STAGING_DIRECTORY"
 ditto "$APP" "$STAGING_DIRECTORY/VolEq Community.app"
 ln -s /Applications "$STAGING_DIRECTORY/Applications"
-
-ARTIFACT_LABEL="VolEq-Community-$VERSION"
-if [[ -n "$ARTIFACT_SUFFIX" ]]; then
-    ARTIFACT_LABEL="$ARTIFACT_LABEL-$ARTIFACT_SUFFIX"
-fi
-DMG="$RELEASE_DIRECTORY/$ARTIFACT_LABEL-macOS-arm64.dmg"
-CHECKSUMS="$RELEASE_DIRECTORY/SHA256SUMS.txt"
-rm -f "$DMG" "$CHECKSUMS"
 
 hdiutil create \
     -volname "VolEq Community $VERSION" \

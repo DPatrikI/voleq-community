@@ -97,8 +97,12 @@ the rendered notes, downloadable assets, and checksum.
 ## Failure handling
 
 - A missing or ambiguous Developer ID identity stops packaging before signing.
-- Invalid Keychain credentials or a rejected notarization stop packaging and
-  leave the JSON response and detailed notary log under `dist/release`.
+- Authentication failures stop packaging without publishable outputs. Rejected
+  submissions retain Apple's JSON response and detailed log when a submission
+  ID is available.
+- Each packaging attempt removes the previous DMG, checksum, and notarization
+  evidence before signing or building. A failed rerun therefore leaves no stale
+  publishable candidate at the documented output paths.
 - Never bypass a failed signature, Gatekeeper, stapling, DMG, model-checksum, or
   notarization check.
 - Never commit signing certificates, private keys, Apple credentials,

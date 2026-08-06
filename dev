@@ -32,6 +32,7 @@ case "$COMMAND" in
     test)
         cd "$REPOSITORY_ROOT"
         "$REPOSITORY_ROOT/scripts/test-dev-doctor.zsh"
+        "$REPOSITORY_ROOT/scripts/test-release-artifacts.zsh"
         "$REPOSITORY_ROOT/scripts/validate-speech-dependencies.sh"
         "$REPOSITORY_ROOT/scripts/validate-release-metadata.sh"
         voleq_validate_toolchain quiet
