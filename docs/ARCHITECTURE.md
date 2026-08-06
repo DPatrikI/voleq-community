@@ -147,7 +147,9 @@ Update persistence is deliberately narrow: consent, enabled state, ordinary
 launch count, last automatic-attempt date, last completed-check status, and the
 last known available version. The release URL is reconstructed from the strict
 version and fixed GitHub origin after relaunch rather than persisted from a
-response.
+response. Persisted status copy never attributes an older result to the current
+installed version, and catching up to a cached release resets that status until
+another check completes.
 
 The macOS shell maintains these presentation invariants:
 

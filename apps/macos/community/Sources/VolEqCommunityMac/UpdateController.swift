@@ -183,7 +183,7 @@ final class UpdateController: ObservableObject {
                     knownAvailableUpdate = nil
                     defaults.removeObject(forKey: PreferenceKey.knownAvailableVersion)
                     if lastCompletedStatus == .updateAvailable {
-                        persistCompletedStatus(.upToDate)
+                        persistCompletedStatus(.never)
                     }
                 }
             } else {
@@ -204,9 +204,9 @@ final class UpdateController: ObservableObject {
     var lastCheckSummary: String {
         switch lastCompletedStatus {
         case .never:
-            "Updates have not been checked yet."
+            "This installation has not been checked for updates yet."
         case .upToDate:
-            "Last check: VolEq \(installedVersion) was up to date."
+            "Last check found no newer published VolEq release."
         case .updateAvailable:
             if let knownAvailableUpdate {
                 "Last check: VolEq \(knownAvailableUpdate.version) is available."

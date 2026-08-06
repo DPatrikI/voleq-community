@@ -299,7 +299,7 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testCachedIndicatorRestoresAndClearsWhenInstalledVersionCatchesUp() throws {
+    func testCachedIndicatorRestoresAndResetsWhenInstalledVersionCatchesUp() throws {
         let defaults = makeDefaults()
         defer { clear(defaults) }
         defaults.set("0.2.0", forKey: UpdateController.PreferenceKey.knownAvailableVersion)
@@ -325,7 +325,34 @@ final class UpdateControllerTests: XCTestCase {
         XCTAssertNil(
             defaults.string(forKey: UpdateController.PreferenceKey.knownAvailableVersion)
         )
-        XCTAssertEqual(caughtUp.lastCompletedStatus, .upToDate)
+        XCTAssertEqual(caughtUp.lastCompletedStatus, .never)
+        XCTAssertEqual(
+            caughtUp.lastCheckSummary,
+            "This installation has not been checked for updates yet."
+        )
+    }
+
+    @MainActor
+    func testRestoredUpToDateStatusDoesNotClaimNewInstalledVersionWasChecked() throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set(
+            LastUpdateCheckStatus.upToDate.rawValue,
+            forKey: UpdateController.PreferenceKey.lastCompletedStatus
+        )
+
+        let upgraded = try makeController(
+            installedVersion: "0.2.0",
+            defaults: defaults,
+            checker: ImmediateUpdateChecker(results: [])
+        )
+
+        XCTAssertEqual(upgraded.lastCompletedStatus, .upToDate)
+        XCTAssertEqual(
+            upgraded.lastCheckSummary,
+            "Last check found no newer published VolEq release."
+        )
+        XCTAssertFalse(upgraded.lastCheckSummary.contains("0.2.0"))
     }
 
     @MainActor

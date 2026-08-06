@@ -18,7 +18,7 @@ Automated validation is deterministic and does not contact live GitHub.
 | Audio isolation | The feature is contained in `VolEqCommunityMac`; the complete audio/DSP/speech regression suite and packaged app build remain required |
 
 Final branch evidence on 2026-08-06: `./dev doctor` passed all five environment
-checks; all 180 Swift tests passed; the release product compiled with complete
+checks; all 181 Swift tests passed; the release product compiled with complete
 strict concurrency and warnings as errors; the packaged app, RNNoise model,
 branding, ad-hoc signature, property list, and unchanged `0.1.0` / build `1`
 version sources passed; and `git diff --check` passed.
