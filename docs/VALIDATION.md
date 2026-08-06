@@ -24,27 +24,22 @@ Automated status: revalidated on 2026-08-02; revised preset accepted by the owne
 
 The 20 ms figure is the DSP lookahead delay. A route that uses sample-rate conversion can add converter and device buffering latency outside the portable leveler.
 
-The 10 ms candidate was judged to be the right direction. The owner then requested and accepted the 20 ms lookahead on 2026-07-29. On 2026-08-02, owner listening found the processed mix noticeably quieter than bypass, especially for louder material. The default extra 6 dB loud-source reduction was removed while retaining 6:1 compression, quiet-priority leveling, lookahead protection, and the limiter. Automated loudness checks pass, and the owner reported testing the revised curve everywhere they use VolEq before accepting it. No route-by-route evidence was recorded for this retune, so the specific release checklist remains unchanged.
+The 10 ms candidate was judged to be the right direction. The owner then requested and accepted the 20 ms lookahead on 2026-07-29. On 2026-08-02, owner listening found the processed mix noticeably quieter than bypass, especially for louder material. The default extra 6 dB loud-source reduction was removed while retaining 6:1 compression, quiet-priority leveling, lookahead protection, and the limiter. Automated loudness checks pass. The final release matrix below re-exercised the accepted curve across built-in, wired, and Bluetooth output.
 
 ### Listening gate
 
-The 20 ms timing and revised default loudness curve are accepted. The following broader release checks remain pending:
-
-- [ ] MacBook speakers: quiet speech, steady loud speech, and quiet-to-loud transition.
-- [ ] Sennheiser HDB 630: regular playback and microphone-active call mode.
-- [ ] Apple AirPods Pro 2: regular playback and microphone-active call mode.
-- [ ] Static background, a microphone bump, clean speech, and music.
-- [ ] Confirm that loud sections are sufficiently reduced without pumping or audible clipping.
-- [ ] Confirm that the initial 20 ms silence is not perceptible as a start or route-change defect.
-
-The earlier Bluetooth routing implementation was listened to successfully on both listed headsets in regular and call modes. That is routing evidence only; it does not count as acceptance of the new lookahead behavior.
+The 20 ms timing and revised default loudness curve passed the final v0.1.0
+physical matrix. Quiet and steady loud speech, quiet-to-loud transitions,
+static, microphone bumps, music, clipping, pumping, and start/route-change
+behavior were checked on both MacBooks, built-in and wired output, and both
+listed Bluetooth headsets in regular and microphone-active modes.
 
 ## Speech-aware leveling
 
 Branch: `feat/speech-aware-leveling`
 
-Automated status: complete on 2026-07-31; MacBook-speaker regression fixes
-accepted, broader physical listening pending.
+Automated status: complete on 2026-07-31. The final v0.1.0 physical matrix is
+complete and recorded below.
 
 | Check | Result |
 | --- | --- |
@@ -147,23 +142,23 @@ menu-bar regression test verifies template rendering and an intrinsic
 18-by-18-point `NSImage` size.
 
 Runtime checks covered presentation switching, utility-window close and reopen,
-Settings access, persistence across relaunch, and explicit Quit. Full
-state-by-state visual and accessibility inspection remains a release-validation
-requirement.
+Settings access, persistence across relaunch, explicit Quit, first-run and
+permission-recovery states, processing failures, and keyboard/accessibility
+states. The owner completed the release inspection on both validated Macs.
 
 ## Mild noise suppression
 
-Automated status: 139 Swift tests pass on 2026-08-04, including authorization,
+Automated status: 145 Swift tests pass on 2026-08-05, including authorization,
 right-only, anti-phase, reset, allocation, 30 ms latency, real-model marker
 alignment, noise reduction, speech projection, stereo balance, and clean-speech
 transparency. Five final CPU runs pass the unchanged 5% gate. Owner listening of
 the optimized build passed on 2026-08-02 across MacBook speakers, Sennheiser HDB
-630, and Apple AirPods Pro 2. The documented soak remains pending, so release
-acceptance remains pending.
+630, and Apple AirPods Pro 2. The later full release matrix and an uninterrupted
+session exceeding eight hours complete the owner acceptance evidence.
 
 | Check | Result |
 | --- | --- |
-| Developer environment checks / Swift tests | 5 / 139 passed |
+| Developer environment checks / Swift tests | 5 / 145 passed |
 | Speech-aware / suppression coupling | The enabled route always prepares stereo suppression for direct and converted paths; disabling speech awareness skips both mono and stereo speech-processor construction and retains base-leveler sample parity |
 | Shared immutable model and independent L/R RNNoise state | Passed |
 | Ordered-float equivalence | Accepted snapshot remains exact; a 1,000-block stereo/right-only/anti-phase differential stream is bit-exact for events, matching-channel power, probability, SNR metadata, and every L/R wet sample across the supported 16 / 44.1 / 48 kHz routes. The 48 kHz fixture retains the close-boundary assertion of ≤0.001; the recorded 48 kHz run observed 0.00038 |
@@ -184,6 +179,13 @@ acceptance remains pending.
 | Independent RNNoise wet alignment review | Finding fixed: main reconstruction is tagged `k - 2`; exact source-block markers and zero-lag seeded broadband correlation pass at all supported rates |
 | 48 kHz stereo release benchmark | **Passed target:** final post-review runs at 4.54% / 4.49% / 4.51% / 4.51% / 4.51% of one core; every run ≤5% |
 | Release app, ad-hoc signature, property list, and patch whitespace | Passed |
+
+The v0.1.0 release-branch rerun on the M1 MacBook Pro measured 4.60% of one
+core (2.758 seconds of thread CPU for 60 seconds of represented audio), within
+the unchanged 5% target. The full 145-test suite, strict-concurrency release
+build with warnings as errors, generated-resource checks, packaged-model checks,
+release metadata validation, property-list validation, and ad-hoc application
+signature all passed on 2026-08-05.
 
 The implementation's reported DSP latency includes measured Speex input and
 output delay:
@@ -262,29 +264,32 @@ existing 1,000-block scalar-versus-paired differential stream also passed both
 states; no new physical listening or soak evidence is claimed for this
 architecture-only change.
 
-### Physical listening evidence
+## Physical v0.1.0 release evidence
 
-The owner accepted the optimized build on 2026-08-02 using MacBook speakers,
-Sennheiser HDB 630, and Apple AirPods Pro 2. The completed scenario matrix covered
-clean and noisy speech, quiet/loud transitions, microphone bumps, instrumental
-music, stereo image, an A/B suppression comparison during development,
-clicks/dropouts, and route restoration. This is physical listening evidence for
-the optimized RNNoise path;
-it is kept separate from the automated equivalence and CPU results above and
-does not claim coverage of untested devices, meeting applications, or long-run
-stability.
+The owner completed multi-hour testing on two separate Apple Silicon systems:
 
-### Thirty-minute soak procedure
+| System | Operating system |
+| --- | --- |
+| M1 MacBook Pro | macOS Tahoe 26.5.2 |
+| M4 MacBook Pro | macOS Tahoe 26.5 |
 
-This procedure is prepared but has not been run. Keep VolEq active for six
-consecutive five-minute stages: clean speech; speech with stationary noise;
-quiet/loud alternation; microphone bumps around speech; instrumental music; and
-mixed speech/music/noise. At each boundary record callback CPU, process memory,
-clicks, dropouts, and route state. Exercise the intended output and microphone
-profile changes between stages where practical. After the final stage stop
-leveling and confirm that the original audio path is restored. Do not mark the
-soak passed without the full uninterrupted observation record.
+Physical coverage included Teams, Zoom, and Google Meet in Safari; built-in
+speakers; 3.5 mm output; AirPods Pro 2; and Sennheiser HDB 630. Both Bluetooth
+devices were exercised in regular playback and microphone-active call mode.
+Application-specific and device-wide capture, live route switching, captured
+process loss, sleep/wake, permission denial and recovery, frontend,
+accessibility and failure states, videos, music, clean and noisy speech,
+quiet-to-loud transitions, static, and microphone bumps produced the expected
+results. Stop and quit restored the original audio path.
 
-## Release validation backlog
+The longest uninterrupted session exceeded eight hours. No robotic processing,
+unintended music amplification, clicks, dropouts, or unbounded behavior were
+observed during the owner-run sessions. This is perceptual and lifecycle
+evidence, not a substitute for the deterministic tests or the canonical CPU
+benchmark above; private recordings and sensitive meeting content were not
+retained.
 
-Before `v0.1.0`, test Teams, Zoom, Meet, browser meetings, wired output, live route switching, process disappearance, sleep/wake, permission recovery, CPU use, memory behavior, and long-running stability. Compatibility claims must distinguish automated coverage from physical-device evidence.
+The release claim is limited to the exact matrix above. No Intel Mac support or
+untested-device compatibility is implied. See
+[COMPATIBILITY.md](COMPATIBILITY.md) for the concise user-facing matrix and
+remaining format and behavior boundaries.

@@ -29,6 +29,9 @@ Published releases are made from `master` and identified by Semantic Versioning 
 ```
 
 `./dev test` runs both the developer-tooling checks and the Swift package tests.
+Official Developer ID signing and notarization are maintainer release tasks;
+contributors do not need release credentials. See
+[`docs/RELEASING.md`](docs/RELEASING.md) for the separate packaging procedure.
 
 Changes to audio behavior should include deterministic tests and a short explanation of listening validation. Automated tests do not replace real-device listening evidence.
 
