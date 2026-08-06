@@ -2,6 +2,39 @@
 
 VolEq changes the audio people hear, so a green build is necessary but not sufficient. Every audio-behavior pull request records deterministic checks here and receives listening validation before merge. Private meeting recordings are never committed.
 
+## Automatic update checks (0.1.1)
+
+Automated validation is deterministic and does not contact live GitHub.
+
+| Check | Evidence |
+| --- | --- |
+| Version contract | Numeric ordering, equality, required release-tag `v`, malformed and overflowing components, and multi-digit components |
+| Latest-release parsing | Newer, equal, and older releases; malformed JSON; draft and prerelease rejection; publication date and strict release URL validation |
+| HTTP and security | Exact endpoint and headers, ephemeral session stores, bounded response, redirects, 403/rate limit, 404, 5xx, timeout, cancellation, and offline classification |
+| Consent and persistence | No automatic request before consent, one prompt on the second ordinary launch, persisted enable/decline choice, cached indicator restoration, and installed-version catch-up clearing |
+| Scheduling | Immediate enable check, disable cancellation, rolling 24-hour gate, tolerant timer, activation, wake, and relaunch due checks |
+| Concurrency | Concurrent request deduplication, manual bypass of the daily limit, and stale-result protection after cancellation |
+| Native presentation state | Manual available/up-to-date/failure feedback, retry state, silent automatic failures, Settings status, application-menu and menu-bar actions, utility/menu-bar indicators, and explicit Quit wiring |
+| Audio isolation | The feature is contained in `VolEqCommunityMac`; the complete audio/DSP/speech regression suite and packaged app build remain required |
+
+Final branch evidence on 2026-08-06: `./dev doctor` passed all five environment
+checks; all 180 Swift tests passed; the release product compiled with complete
+strict concurrency and warnings as errors; the packaged app, RNNoise model,
+branding, ad-hoc signature, property list, and unchanged `0.1.0` / build `1`
+version sources passed; and `git diff --check` passed.
+
+An isolated final app bundle was also inspected through the native accessibility
+tree. Settings exposed both presentation modes, update consent, explanatory
+copy, status, and the manual action; a live manual check presented the expected
+native up-to-date result; the second ordinary launch presented the consent
+dialog; and, after declining, a later isolated launch ran without a visible
+window or repeated prompt, consistent with Menu Bar presentation. This runtime
+inspection did not grant audio-capture permission, traverse the interface with
+VoiceOver itself, or produce a usable process-level network-denied launch.
+Owner validation is therefore still required for uninterrupted real audio,
+VoiceOver traversal, the Menu Bar
+popover, and the rendered offline retry flow before release work begins.
+
 ## Lookahead leveling
 
 Branch: `feat/lookahead-leveling`

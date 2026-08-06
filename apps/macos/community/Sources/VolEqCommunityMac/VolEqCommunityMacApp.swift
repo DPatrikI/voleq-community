@@ -10,6 +10,7 @@ import VolEqSpeech
 struct VolEqCommunityMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var presentation: MacPresentationController
+    @StateObject private var updates: UpdateController
     private let applicationModel: VolEqApplicationModel
 
     init() {
@@ -23,19 +24,36 @@ struct VolEqCommunityMacApp: App {
         let applicationModel = VolEqApplicationModel.shared
         self.applicationModel = applicationModel
         _presentation = StateObject(wrappedValue: applicationModel.presentation)
+        _updates = StateObject(wrappedValue: applicationModel.updates)
     }
 
     var body: some Scene {
         MenuBarExtra(isInserted: menuBarInsertion) {
             MenuBarControlSurface(
                 model: applicationModel.audio,
+                updates: updates,
                 openSettings: { appDelegate.showSettings() }
             )
         } label: {
-            MenuBarStatusLabel(model: applicationModel.audio)
+            MenuBarStatusLabel(
+                model: applicationModel.audio,
+                updates: updates
+            )
         }
         .menuBarExtraStyle(.window)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button(
+                    updates.isChecking
+                        ? "Checking for Updates…"
+                        : "Check for Updates…"
+                ) {
+                    Task {
+                        await updates.checkManually()
+                    }
+                }
+                .disabled(updates.isChecking)
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
                     appDelegate.showSettings()

@@ -4,6 +4,26 @@ Notable changes to VolEq Community are recorded here. The project follows
 [Semantic Versioning](https://semver.org/); releases before 1.0 may still change
 their public interfaces as the supported platform set grows.
 
+## [Unreleased]
+
+Intended for VolEq Community 0.1.1. The application and build versions remain
+unchanged until the separate release branch.
+
+### Added
+
+- Dependency-free manual update checks through the latest published GitHub
+  Release, available from the application menu, menu-bar popover, and Settings.
+- Explicit second-launch consent for optional checks at most once every 24
+  hours while VolEq is running.
+- Accessible in-app indicators for a newer release without automatic download,
+  installation, notifications, or interruption of active leveling.
+
+### Privacy
+
+- Audio processing remains local and offline. Manual or consented automatic
+  update checks contact GitHub without sending audio, an account identifier, or
+  usage telemetry.
+
 ## [0.1.0] - 2026-08-06
 
 ### Added
@@ -35,4 +55,5 @@ their public interfaces as the supported platform set grows.
   the original audio.
 - Singing can be classified as speech.
 
+[Unreleased]: https://github.com/DPatrikI/voleq-community/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/DPatrikI/voleq-community/releases/tag/v0.1.0

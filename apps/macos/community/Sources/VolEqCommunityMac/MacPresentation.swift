@@ -65,10 +65,41 @@ final class VolEqApplicationModel {
 
     let audio: AudioCaptureController
     let presentation: MacPresentationController
+    let updates: UpdateController
 
-    init(defaults: UserDefaults) {
+    init(
+        defaults: UserDefaults,
+        installedVersion: ApplicationVersion? = nil
+    ) {
         audio = AudioCaptureController()
         presentation = MacPresentationController(defaults: defaults)
+        let resolvedVersion: ApplicationVersion
+        let checker: any UpdateChecking
+        if let installedVersion {
+            resolvedVersion = installedVersion
+            checker = GitHubReleaseChecker(
+                httpClient: EphemeralUpdateHTTPClient()
+            )
+        } else if let bundledVersion = try? ApplicationVersion(bundle: .main) {
+            resolvedVersion = bundledVersion
+            checker = GitHubReleaseChecker(
+                httpClient: EphemeralUpdateHTTPClient()
+            )
+        } else {
+            // A malformed package must not let optional update work prevent the
+            // audio application from starting. Packaging validation catches
+            // this condition; manual checks fail safely in such a build.
+            resolvedVersion = .zero
+            checker = UnavailableUpdateChecker()
+        }
+        updates = UpdateController(
+            installedVersion: resolvedVersion,
+            checker: checker,
+            defaults: defaults,
+            clock: SystemUpdateClock(),
+            scheduler: FoundationUpdateScheduler(),
+            workspaceOpener: SystemUpdateWorkspaceOpener()
+        )
     }
 
     private static func makeDefaults() -> UserDefaults {

@@ -8,6 +8,7 @@ import VolEqMacAudio
 @available(macOS 14.2, *)
 struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
     @ObservedObject var model: Model
+    @ObservedObject var updates: UpdateController
     let openSettings: () -> Void
 
     var body: some View {
@@ -26,6 +27,20 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
             Divider()
 
             RuntimeStatusView(model: model, compact: false)
+
+            UpdateAvailableIndicator(updates: updates, compact: false)
+
+            if updates.isChecking {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Checking for updates…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Checking for updates")
+            }
 
             Divider()
 
@@ -58,6 +73,7 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
 @available(macOS 14.2, *)
 struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
     @ObservedObject var model: Model
+    @ObservedObject var updates: UpdateController
     let openSettings: () -> Void
 
     var body: some View {
@@ -80,7 +96,25 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
 
             CaptureControls(model: model, compact: true)
 
+            UpdateAvailableIndicator(updates: updates, compact: true)
+
             Divider()
+
+            HStack {
+                Button("Check for Updates…") {
+                    Task { await updates.checkManually() }
+                }
+                .buttonStyle(.plain)
+                .disabled(updates.isChecking)
+
+                if updates.isChecking {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Checking for updates")
+                }
+
+                Spacer()
+            }
 
             HStack {
                 Button(action: openSettings) {
@@ -106,10 +140,53 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
 @available(macOS 14.2, *)
 struct MenuBarStatusLabel<Model: VolEqControlSurfaceModel>: View {
     @ObservedObject var model: Model
+    @ObservedObject var updates: UpdateController
 
     var body: some View {
         Image(nsImage: VolEqBrand.menuBarIcon)
-            .accessibilityLabel("VolEq, \(model.runtimeTitle)")
+            .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        if let update = updates.knownAvailableUpdate {
+            return "VolEq, \(model.runtimeTitle), version \(update.version) available"
+        }
+        return "VolEq, \(model.runtimeTitle)"
+    }
+}
+
+@available(macOS 14.2, *)
+private struct UpdateAvailableIndicator: View {
+    @ObservedObject var updates: UpdateController
+    let compact: Bool
+
+    var body: some View {
+        if let update = updates.knownAvailableUpdate {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.blue)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("VolEq \(update.version.description) is available")
+                        .font(compact ? .callout.weight(.medium) : .headline)
+                    if !compact {
+                        Text("VolEq will open GitHub; it never downloads or installs updates.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                Button("View Release…") {
+                    _ = updates.openRelease(update)
+                }
+            }
+            .padding(compact ? 10 : 12)
+            .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityElement(children: .contain)
+        }
     }
 }
 

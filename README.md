@@ -32,8 +32,9 @@ permission can be removed separately in System Settings.
   both detected.
 - Supports built-in, wired, and Bluetooth outputs, including microphone-active
   headset call modes.
-- Runs locally and offline with no account, audio recording, telemetry, or model
-  download.
+- Processes audio locally and offline with no account, audio recording,
+  telemetry, or model download. Manual or explicitly enabled daily update
+  checks contact GitHub without sending audio or usage data.
 - Offers native window and menu-bar presentations.
 
 The default speech-aware path introduces approximately **30 ms of DSP latency at
@@ -81,9 +82,11 @@ classification. VolEq mutes the selected original stream only while its
 replacement path is active and restores original audio when processing stops or
 fails.
 
-No virtual audio driver, permanent output-device change, network service, or
-model download is required. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the
-audio pipeline and [PRIVACY.md](PRIVACY.md) for the concise privacy statement.
+No virtual audio driver, permanent output-device change, online audio service,
+or model download is required. The optional first-party update checker reads the
+latest published release from GitHub and never downloads or installs an update.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the audio pipeline and
+[PRIVACY.md](PRIVACY.md) for the concise privacy statement.
 
 ## Community edition
 
