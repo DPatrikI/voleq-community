@@ -4,8 +4,9 @@ VolEq uses explicit package boundaries so the audio algorithm can evolve indepen
 
 ```text
 VolEqCommunityMac
-        |
-        v
+    |           |
+    |           +-----> GitHub Releases API (manual or consented checks only)
+    v
  VolEqMacAudio ------> VolEqDSP ------> VolEqCore
         |                 |
         |                 v
@@ -123,6 +124,33 @@ does not generate or reinterpret the logo.
 The application target should not contain DSP or raw Core Audio lifecycle
 logic.
 
+Update checking is also application-shell-only. `ApplicationVersion` parses
+strict three-component installed versions and canonical `vMAJOR.MINOR.PATCH`
+release tags with numeric comparison. `GitHubReleaseChecker` uses an injected,
+bounded HTTP client to read the latest public full release without
+authentication. Its ephemeral URL session rejects redirects, disables
+persistent caches, cookies, and credentials, and accepts only the expected
+GitHub API response. Release links are exposed only after exact HTTPS host,
+credential, and repository-tag path validation.
+
+The main-actor `UpdateController` owns the one-time second-launch consent,
+rolling 24-hour automatic-attempt gate, activation/wake and tolerant timer
+scheduling, request deduplication, stale-result protection, persistence, and UI
+state. Its clock, checker, defaults, workspace opener, and scheduler boundaries
+are injectable for deterministic tests. Network parsing runs outside the main
+actor and never enters the audio callback. Manual checks bypass the daily gate;
+automatic failures update Settings without presenting an alert. Only a
+validated GitHub release page may be opened, and VolEq never downloads or
+executes update content.
+
+Update persistence is deliberately narrow: consent, enabled state, ordinary
+launch count, last automatic-attempt date, last completed-check status, and the
+last known available version. The release URL is reconstructed from the strict
+version and fixed GitHub origin after relaunch rather than persisted from a
+response. Persisted status copy never attributes an older result to the current
+installed version, and catching up to a cached release resets that status until
+another check completes.
+
 The macOS shell maintains these presentation invariants:
 
 - Window and Menu Bar are mutually exclusive presentations over the same
@@ -137,6 +165,9 @@ The macOS shell maintains these presentation invariants:
   A failed activation-policy change rolls back to the previously reachable
   presentation.
 - Explicit Quit stops active leveling before process termination.
+- Update checks never start, stop, rebuild, or otherwise mutate the audio
+  controller; presentation changes and update activity remain independent of
+  the active realtime path.
 
 ## Dependency rules
 
