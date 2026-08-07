@@ -180,7 +180,7 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
 
     @available(macOS 14.2, *)
     @MainActor
-    func testRejectedSpeechStartupCleansUpBeforeAnyCallbackCanStartAndIsSafeToStopOrRetry() {
+    func testRejectedSpeechStartupCleansUpBeforeAnyCallbackCanStartAndIsSafeToStopOrRetry() async {
         var cleanupCount = 0
         var startAttemptCount = 0
         var teardownSteps: [AudioCaptureTeardownStep] = []
@@ -192,12 +192,16 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
                 controller._testOnlySimulatePartiallyPreparedCaptureResources()
                 throw SpeechAnalyzerError.unsupportedSampleRate(22_050)
             },
-            teardownStepRecorder: { teardownSteps.append($0) }
+            teardownStepRecorder: { teardownSteps.append($0) },
+            permissionProbeFactory: { _ in
+                ImmediateSystemAudioPermissionProbe()
+            }
         )
 
         controller.start()
+        await waitForRuntimeState(controller, .failed)
         XCTAssertEqual(startAttemptCount, 1)
-        XCTAssertEqual(cleanupCount, 1)
+        XCTAssertEqual(cleanupCount, 2)
         XCTAssertEqual(teardownSteps, [
             .activeOutputListeners,
             .stopIOProc,
@@ -213,15 +217,16 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
 
         controller.stop()
         controller.stop()
-        XCTAssertEqual(cleanupCount, 3)
+        XCTAssertEqual(cleanupCount, 4)
         XCTAssertEqual(teardownSteps.count, 5)
         XCTAssertTrue(controller._testOnlyCaptureResourcesAreInactive())
         XCTAssertFalse(controller.isRunning)
         XCTAssertEqual(controller.runtimeState, .stopped)
 
         controller.start()
+        await waitForRuntimeState(controller, .failed)
         XCTAssertEqual(startAttemptCount, 2)
-        XCTAssertEqual(cleanupCount, 4)
+        XCTAssertEqual(cleanupCount, 6)
         XCTAssertEqual(teardownSteps.count, 10)
         XCTAssertEqual(Array(teardownSteps.suffix(5)), [
             .activeOutputListeners,
@@ -332,6 +337,9 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
                 }
                 restarted.fulfill()
             },
+            permissionProbeFactory: { _ in
+                ImmediateSystemAudioPermissionProbe()
+            },
             routeRecoveryDelayNanoseconds: 0
         )
 
@@ -339,7 +347,7 @@ final class AudioIOProcessorFailureRecoveryTests: AudioPipelineTestCase {
         XCTAssertEqual(controller.runtimeState, .recovering)
         await fulfillment(of: [restarted], timeout: 2)
 
-        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(stopCount, 2)
         XCTAssertNil(restartError)
         XCTAssertTrue(resumedFiniteAudio)
         XCTAssertEqual(creations.values, [48_000, 48_000, 16_000, 16_000])

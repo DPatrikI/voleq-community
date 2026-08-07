@@ -31,8 +31,10 @@ struct VolEqCommunityMacApp: App {
         MenuBarExtra(isInserted: menuBarInsertion) {
             MenuBarControlSurface(
                 model: applicationModel.audio,
+                systemAudioAccess: applicationModel.systemAudioAccess,
                 updates: updates,
-                openSettings: { appDelegate.showSettings() }
+                openSettings: { appDelegate.showSettings() },
+                switchToWindow: { presentation.mode = .window }
             )
         } label: {
             MenuBarStatusLabel(

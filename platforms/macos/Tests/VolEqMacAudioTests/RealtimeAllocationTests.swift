@@ -9,6 +9,31 @@ import VolEqSpeech
 @testable import VolEqMacAudio
 
 final class RealtimeAllocationTests: XCTestCase {
+    func testPermissionProbeSignalCallbackIsAllocationFree() throws {
+        let latch = try PermissionSignalLatch()
+        var samples = Array(repeating: Float(0.25), count: 480 * 2)
+        var allocationCount = 1
+
+        samples.withUnsafeMutableBytes { bytes in
+            var list = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: 2,
+                    mDataByteSize: UInt32(bytes.count),
+                    mData: bytes.baseAddress
+                )
+            )
+            withUnsafePointer(to: &list) { input in
+                voleq_test_allocation_tracking_begin()
+                latch._testOnlyObserve(input)
+                allocationCount = Int(voleq_test_allocation_tracking_end())
+            }
+        }
+
+        XCTAssertEqual(allocationCount, 0)
+        XCTAssertEqual(latch.qualifyingCallbackCount, 1)
+    }
+
     func testFirstAndWarmedStereoProcessingAreAllocationFree() throws {
         for sampleRate in [16_000.0, 44_100.0, 48_000.0] {
             try assertAllocationFree(

@@ -4,6 +4,16 @@ VolEq processes captured application or device audio locally on the Mac. The
 Community application does not record captured audio, write it to disk, upload
 it, send it to an online service, or use it for telemetry.
 
+Before processing can start, VolEq uses a temporary unmuted, input-only Core
+Audio probe for the selected application or device-wide mix. It examines
+captured samples only through a preallocated in-memory signal latch, never
+replays them, never writes them to disk, and never changes the original output.
+The probe is destroyed before the real processing path is created. Denial,
+silence, timeout, cancellation, malformed input, and ordinary Core Audio
+startup failure leave processing stopped and the original audio unchanged when
+cleanup completes. If Core Audio refuses to stop or destroy a resource, VolEq
+retains ownership, requires Quit, and does not claim that restoration completed.
+
 When speech-aware leveling is enabled, speech probability and denoised samples
 are calculated with one prepared RNNoise state per channel using the same
 bundled model, and mild suppression is applied automatically when its speech and

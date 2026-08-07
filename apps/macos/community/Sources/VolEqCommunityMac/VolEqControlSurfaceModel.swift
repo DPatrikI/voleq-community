@@ -12,10 +12,13 @@ protocol VolEqControlSurfaceModel: ObservableObject {
     var speechAwarenessEnabled: Bool { get set }
     var isRunning: Bool { get }
     var runtimeState: CaptureRuntimeState { get }
+    var systemAudioAccessState: SystemAudioAccessState { get }
     var status: String { get }
 
     func refreshProcesses()
     func toggle()
+    func checkAudioAccessAgain()
+    func cancelAudioAccessCheck()
 }
 
 @available(macOS 14.2, *)
@@ -23,7 +26,23 @@ extension AudioCaptureController: VolEqControlSurfaceModel { }
 
 extension VolEqControlSurfaceModel {
     var canStart: Bool {
-        mode == .system || selectedProcessID != nil
+        !controlsLocked && (mode == .system || selectedProcessID != nil)
+    }
+
+    var isCheckingAudioAccess: Bool {
+        systemAudioAccessState == .checking
+    }
+
+    var controlsLocked: Bool {
+        isRunning
+            || runtimeState == .preparing
+            || runtimeState == .recovering
+            || isCheckingAudioAccess
+            || cleanupRequiresQuit
+    }
+
+    private var cleanupRequiresQuit: Bool {
+        systemAudioAccessState == .actionRequired(.cleanupFailed)
     }
 
     var runtimeTitle: String {
@@ -34,10 +53,14 @@ extension VolEqControlSurfaceModel {
             "Ready"
         case .preparing:
             "Starting"
+        case .checkingAccess:
+            "Checking Audio Access"
         case .active:
             "Active"
         case .recovering:
             "Reconnecting"
+        case .permissionRequired:
+            "Audio Access Required"
         case .failed:
             "Needs attention"
         }
@@ -61,9 +84,9 @@ extension VolEqControlSurfaceModel {
         switch runtimeState {
         case .active:
             .green
-        case .preparing, .recovering:
+        case .preparing, .checkingAccess, .recovering:
             .orange
-        case .failed:
+        case .permissionRequired, .failed:
             .red
         case .stopped, .ready:
             .secondary

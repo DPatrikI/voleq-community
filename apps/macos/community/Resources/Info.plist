@@ -27,7 +27,7 @@
     <key>LSMinimumSystemVersion</key>
     <string>14.2</string>
     <key>NSAudioCaptureUsageDescription</key>
-    <string>VolEq captures an application's outgoing audio so it can make quiet speakers louder and loud speakers quieter.</string>
+    <string>VolEq uses System Audio Recording access to level the playback you choose in real time. Audio is processed on this Mac and is never saved or uploaded.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>

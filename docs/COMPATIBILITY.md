@@ -22,13 +22,20 @@ Teams, Zoom, and Google Meet in Safari were used for real meetings. Additional
 material included videos, instrumental music, clean and noisy speech,
 quiet-to-loud transitions, static, and microphone bumps. Window and menu-bar
 presentation, keyboard and accessibility states, route switching, captured
-process disappearance, sleep/wake, permission denial and recovery, stop/quit,
+process disappearance, sleep/wake, stop/quit,
 and original-audio restoration were exercised. The longest uninterrupted
 session exceeded eight hours. These owner-run checks produced the expected
 audio and lifecycle behavior without observed robotic artifacts, unintended
 music amplification, clicks, or dropouts.
 
 Private meeting recordings are not stored in this repository.
+
+The earlier v0.1.0 permission-denial and recovery claim is withdrawn. The owner
+later reproduced a denial path that could mute original audio while VolEq
+appeared active. The Unreleased 0.1.1 source adds an unmuted verification gate,
+but denial, grant, relaunch, route-recovery, window/menu-bar, and built-in/wired/
+Bluetooth cases remain pending signed-bundle owner validation before they can be
+added back to the compatibility matrix.
 
 ## Audio formats and latency
 
@@ -45,8 +52,8 @@ Private meeting recordings are not stored in this repository.
 - The official binary is arm64-only. Intel Macs are not supported by v0.1.0.
 - The current processor levels the combined captured mix. It cannot identify
   meeting participants or retain a separate gain profile for each person.
-- Output changes rebuild the route and can briefly interrupt audio while Core
-  Audio settles the new device.
+- Output changes stop processing, restore the original route, and require a new
+  unmuted access verification before processing can resume.
 - Only processes currently producing audio appear in application capture.
 - Multichannel layouts fail safely before processing begins.
 - Singing may be treated as speech and receive leveling or mild suppression.

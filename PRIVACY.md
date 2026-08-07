@@ -1,8 +1,8 @@
 # Privacy
 
-VolEq Community processes captured audio locally in memory. When speech-aware leveling is enabled, bundled RNNoise states analyze and mildly denoise speech. Turning speech awareness off skips RNNoise and speech analysis entirely. Apple's offline SoundAnalysis framework supplies the slower speech-versus-music decision. The application does not intentionally record audio to disk, transmit audio, create user accounts, or include analytics. Update checks never include captured audio or usage telemetry.
+VolEq Community processes captured audio locally in memory. Captured audio is never saved, uploaded, or used for telemetry. When speech-aware leveling is enabled, bundled RNNoise states analyze and mildly denoise speech. Turning speech awareness off skips RNNoise and speech analysis entirely. Apple's offline SoundAnalysis framework supplies the slower speech-versus-music decision. The application does not create user accounts or include analytics. Update checks never include captured audio or usage telemetry.
 
-macOS controls access through System Audio Recording permission. VolEq requests access because it must capture selected outgoing application audio before leveling and replaying it to the current output device.
+macOS controls access through System Audio Recording permission. Before a muting processing path can exist, VolEq uses a temporary unmuted, input-only Core Audio probe for the selected application or device-wide mix. The probe never replays samples or changes the original output and keeps samples only in memory. Silence, cancellation, timeout, malformed input, permission failure, or an ordinary Core Audio startup failure leaves VolEq stopped with the original audio unchanged when cleanup completes. If Core Audio refuses to stop or destroy a resource, VolEq retains ownership, requires Quit, and does not claim that the original audio path was restored.
 
 The application selector displays information macOS exposes for processes that are currently producing audio. VolEq does not intentionally persist that process list.
 
