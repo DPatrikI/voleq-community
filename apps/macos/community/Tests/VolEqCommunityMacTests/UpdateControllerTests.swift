@@ -48,6 +48,50 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testNegativePersistedLaunchCountIsSanitizedAsFirstLaunch() throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set(
+            -1,
+            forKey: UpdateController.PreferenceKey.ordinaryLaunchCount
+        )
+        let controller = try makeController(
+            defaults: defaults,
+            checker: ImmediateUpdateChecker(results: [])
+        )
+
+        controller.applicationDidBecomeReady()
+
+        XCTAssertEqual(
+            defaults.integer(forKey: UpdateController.PreferenceKey.ordinaryLaunchCount),
+            1
+        )
+        XCTAssertFalse(controller.shouldPresentConsent)
+    }
+
+    @MainActor
+    func testMaximumPersistedLaunchCountSaturatesWithoutOverflow() throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set(
+            Int.max,
+            forKey: UpdateController.PreferenceKey.ordinaryLaunchCount
+        )
+        let controller = try makeController(
+            defaults: defaults,
+            checker: ImmediateUpdateChecker(results: [])
+        )
+
+        controller.applicationDidBecomeReady()
+
+        XCTAssertEqual(
+            defaults.integer(forKey: UpdateController.PreferenceKey.ordinaryLaunchCount),
+            2
+        )
+        XCTAssertTrue(controller.shouldPresentConsent)
+    }
+
+    @MainActor
     func testEnabledConsentAndSchedulePersistAcrossRelaunch() async throws {
         let defaults = makeDefaults()
         defer { clear(defaults) }
@@ -211,6 +255,97 @@ final class UpdateControllerTests: XCTestCase {
         callCount = await checker.callCount
         XCTAssertEqual(callCount, 1)
         XCTAssertNotNil(scheduler.scheduledInterval)
+    }
+
+    @MainActor
+    func testFuturePersistedAutomaticAttemptResetsToNowAndSchedulesTwentyFourHours() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let now = Date(timeIntervalSince1970: 40_000)
+        defaults.set(
+            UpdateConsentDecision.enabled.rawValue,
+            forKey: UpdateController.PreferenceKey.consentDecision
+        )
+        defaults.set(
+            true,
+            forKey: UpdateController.PreferenceKey.automaticallyChecks
+        )
+        defaults.set(
+            now.addingTimeInterval(10 * UpdateController.automaticInterval),
+            forKey: UpdateController.PreferenceKey.lastAutomaticAttempt
+        )
+        let checker = ImmediateUpdateChecker(results: [])
+        let scheduler = TestUpdateScheduler()
+        let controller = try makeController(
+            defaults: defaults,
+            checker: checker,
+            clock: TestUpdateClock(now: now),
+            scheduler: scheduler
+        )
+
+        controller.applicationDidBecomeReady()
+
+        let callCount = await checker.callCount
+        XCTAssertEqual(callCount, 0)
+        XCTAssertEqual(
+            defaults.object(forKey: UpdateController.PreferenceKey.lastAutomaticAttempt) as? Date,
+            now
+        )
+        XCTAssertEqual(
+            scheduler.scheduledInterval ?? -1,
+            UpdateController.automaticInterval,
+            accuracy: 0.001
+        )
+    }
+
+    @MainActor
+    func testClockRollbackResetsAutomaticAttemptAndStartsFreshInterval() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let attempt = Date(timeIntervalSince1970: 50_000)
+        defaults.set(
+            UpdateConsentDecision.enabled.rawValue,
+            forKey: UpdateController.PreferenceKey.consentDecision
+        )
+        defaults.set(
+            true,
+            forKey: UpdateController.PreferenceKey.automaticallyChecks
+        )
+        defaults.set(
+            attempt,
+            forKey: UpdateController.PreferenceKey.lastAutomaticAttempt
+        )
+        let clock = TestUpdateClock(now: attempt.addingTimeInterval(60))
+        let checker = ImmediateUpdateChecker(results: [])
+        let scheduler = TestUpdateScheduler()
+        let controller = try makeController(
+            defaults: defaults,
+            checker: checker,
+            clock: clock,
+            scheduler: scheduler
+        )
+
+        controller.applicationDidBecomeReady()
+        XCTAssertEqual(
+            scheduler.scheduledInterval ?? -1,
+            UpdateController.automaticInterval - 60,
+            accuracy: 0.001
+        )
+
+        clock.now = attempt.addingTimeInterval(-60)
+        controller.applicationActivatedOrWoke()
+
+        let callCount = await checker.callCount
+        XCTAssertEqual(callCount, 0)
+        XCTAssertEqual(
+            defaults.object(forKey: UpdateController.PreferenceKey.lastAutomaticAttempt) as? Date,
+            clock.now
+        )
+        XCTAssertEqual(
+            scheduler.scheduledInterval ?? -1,
+            UpdateController.automaticInterval,
+            accuracy: 0.001
+        )
     }
 
     @MainActor

@@ -223,7 +223,13 @@ final class UpdateController: ObservableObject {
     }
 
     func applicationDidBecomeReady() {
-        let launchCount = defaults.integer(forKey: PreferenceKey.ordinaryLaunchCount) + 1
+        let persistedLaunchCount = defaults.integer(
+            forKey: PreferenceKey.ordinaryLaunchCount
+        )
+        // Only first launch versus second-or-later matters. Saturating the
+        // persisted value also makes corrupted negative/extreme preferences
+        // safe to consume without overflow during application startup.
+        let launchCount = persistedLaunchCount >= 1 ? 2 : 1
         defaults.set(launchCount, forKey: PreferenceKey.ordinaryLaunchCount)
 
         if consentDecision == .undecided, launchCount >= 2 {
@@ -319,13 +325,27 @@ final class UpdateController: ObservableObject {
         return true
     }
 
-    private var lastAutomaticAttempt: Date? {
-        defaults.object(forKey: PreferenceKey.lastAutomaticAttempt) as? Date
+    private var normalizedLastAutomaticAttempt: Date? {
+        guard let attempt = defaults.object(
+            forKey: PreferenceKey.lastAutomaticAttempt
+        ) as? Date else {
+            return nil
+        }
+
+        let now = clock.now
+        guard attempt <= now else {
+            // Wall-clock rollback or a corrupted future preference must not
+            // postpone update discovery indefinitely. Treat now as the start
+            // of a fresh rolling interval rather than checking immediately.
+            defaults.set(now, forKey: PreferenceKey.lastAutomaticAttempt)
+            return now
+        }
+        return attempt
     }
 
     private var isAutomaticCheckDue: Bool {
-        guard let lastAutomaticAttempt else { return true }
-        return clock.now.timeIntervalSince(lastAutomaticAttempt)
+        guard let normalizedLastAutomaticAttempt else { return true }
+        return clock.now.timeIntervalSince(normalizedLastAutomaticAttempt)
             >= Self.automaticInterval
     }
 
@@ -341,13 +361,13 @@ final class UpdateController: ObservableObject {
 
     private func scheduleNextAutomaticCheck() {
         guard automaticallyChecksForUpdates,
-              let lastAutomaticAttempt
+              let normalizedLastAutomaticAttempt
         else {
             scheduler.cancel()
             return
         }
 
-        let dueDate = lastAutomaticAttempt.addingTimeInterval(
+        let dueDate = normalizedLastAutomaticAttempt.addingTimeInterval(
             Self.automaticInterval
         )
         scheduler.schedule(
@@ -430,7 +450,7 @@ final class UpdateController: ObservableObject {
         }
 
         if automaticallyChecksForUpdates {
-            if lastAutomaticAttempt == nil {
+            if normalizedLastAutomaticAttempt == nil {
                 checkIfAutomaticallyDueOrSchedule()
             } else {
                 scheduleNextAutomaticCheck()
