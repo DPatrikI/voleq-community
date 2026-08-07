@@ -91,6 +91,29 @@ seam for direct tests, while published state, Core Audio resources, teardown
 ordering, route recovery, and diagnostics scheduling remain together so no
 controller-facing lifecycle transition can bypass cleanup.
 
+System Audio Recording startup is a two-phase gate. First, the controller
+validates the selected process or device-wide exclusion, output device and
+format, and optional speech model without creating a tap. The application shell
+then supplies the persisted first-use explanation decision. After Continue, an
+injectable permission-probe factory creates a private, unmuted, input-only tap
+and aggregate for the same target. A preallocated C11-atomic latch requires two
+callbacks with finite samples above `1e-7`; silence can only time out as
+unverified because the public SDK has no dedicated authorization-status API.
+The probe never has an output path and is fully stopped and destroyed before
+the controller may create `.mutedWhenTapped` processing resources.
+
+Every fresh start and route-recovery rebuild repeats the probe. Published
+`SystemAudioAccessState` distinguishes explanation, checking, verified, and
+action-required states. `isRunning` remains false through preflight and probing,
+and becomes true only after the verified real pipeline starts successfully.
+Denial, uncertainty, timeout, cancellation, malformed samples, route changes,
+and ordinary Core Audio startup failures tear down the probe and leave the
+original output unchanged when cleanup succeeds. If Core Audio refuses a stop
+or destroy operation, VolEq retains resource ownership, blocks another
+pipeline, requires Quit, and does not claim restoration. Tests inject
+explanation, probe, time, factory, and teardown seams; production code uses only
+public Core Audio APIs.
+
 Within the callback pipeline, `AudioIOProcessor` owns the prepared direct and
 converted DSP paths and selects exactly one after `AudioCallbackCadenceAnalyzer`
 resolves the hardware clocks. `BufferedSampleRateConverter` owns the Core Audio
@@ -111,6 +134,12 @@ commands. `AppDelegate` owns native window controllers, Dock activation policy,
 Settings presentation, and explicit termination behavior. Changing between
 Window and Menu Bar presentation changes only application-shell state; it does
 not rebuild or mutate the active audio path.
+
+`SystemAudioAccessPresentationController` owns explanation acceptance
+persistence and injectable System Settings navigation. `AppDelegate` presents
+the native Continue / Not Now explanation. Both control surfaces render the
+same checking, Cancel, Open System Settings, Check Again, fallback-path, and
+relaunch guidance without coupling those shell concerns to Core Audio.
 
 The application shell also owns first-party branding integration. The build
 copies a generated `.icns` and a 256-by-256-pixel template raster for the macOS
@@ -182,6 +211,9 @@ The macOS shell maintains these presentation invariants:
 ## Real-time audio rules
 
 - Do not allocate memory, wait on a contended lock, log, or call UI code in the audio callback.
+- The permission-probe callback only traverses the supplied float buffers and
+  updates its preallocated C11-atomic malformed latch and qualifying-callback
+  counter. It does not allocate, lock, log, replay samples, or call UI code.
 - UI settings are published as snapshots. The callback uses its previous snapshot if an update lock is busy.
 - The leveler allocates its linked-stereo lookahead storage during construction. Its default 20 ms delay lets the detector lower gain before a loud onset is emitted; the delay, detector, and gain history start empty whenever the audio route is rebuilt. The first lookahead period is therefore silence by design. A future peak may lower the gain envelope immediately but may never raise it, and its maximum-gain cap travels with the delayed frame so release smoothing cannot outrun an isolated transient. The delayed frame still passes through the final safety limiter.
 - RNNoise model loading and checksum verification finish before the process tap

@@ -5,6 +5,9 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+#include <CoreAudio/CoreAudioTypes.h>
 
 typedef struct VolEqRealtimeContentState VolEqRealtimeContentState;
 
@@ -30,6 +33,24 @@ void voleq_realtime_content_state_set_speech_authorized(
 
 bool voleq_realtime_content_state_is_speech_authorized(
     const VolEqRealtimeContentState *state
+);
+
+typedef struct VolEqRealtimeSignalLatch VolEqRealtimeSignalLatch;
+
+VolEqRealtimeSignalLatch *voleq_realtime_signal_latch_create(void);
+void voleq_realtime_signal_latch_destroy(VolEqRealtimeSignalLatch *latch);
+
+void voleq_realtime_signal_latch_observe_callback(
+    VolEqRealtimeSignalLatch *latch,
+    const AudioBufferList *input_data
+);
+
+uint32_t voleq_realtime_signal_latch_qualifying_callback_count(
+    const VolEqRealtimeSignalLatch *latch
+);
+
+bool voleq_realtime_signal_latch_is_malformed(
+    const VolEqRealtimeSignalLatch *latch
 );
 
 #endif

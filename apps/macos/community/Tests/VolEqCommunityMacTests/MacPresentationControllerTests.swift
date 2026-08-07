@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+import AppKit
 import Foundation
 import XCTest
 @testable import VolEqCommunityMac
@@ -31,6 +32,63 @@ final class MacPresentationControllerTests: XCTestCase {
             let controller = MacPresentationController(defaults: defaults)
             XCTAssertEqual(controller.mode, .window)
         }
+    }
+
+    func testAlreadyRequestedActivationPolicyIsSuccessfulWithoutSettingAgain() {
+        var requestedPolicies: [NSApplication.ActivationPolicy] = []
+
+        let succeeded = MacActivationPolicyTransition.apply(
+            current: .regular,
+            desired: .regular,
+            setPolicy: { policy in
+                requestedPolicies.append(policy)
+                return false
+            }
+        )
+
+        XCTAssertTrue(succeeded)
+        XCTAssertTrue(requestedPolicies.isEmpty)
+    }
+
+    func testActivationPolicyChangeReportsSetterResult() {
+        var requestedPolicies: [NSApplication.ActivationPolicy] = []
+
+        let failed = MacActivationPolicyTransition.apply(
+            current: .accessory,
+            desired: .regular,
+            setPolicy: { policy in
+                requestedPolicies.append(policy)
+                return false
+            }
+        )
+
+        XCTAssertFalse(failed)
+        XCTAssertEqual(requestedPolicies, [.regular])
+
+        let succeeded = MacActivationPolicyTransition.apply(
+            current: .accessory,
+            desired: .regular,
+            setPolicy: { _ in true }
+        )
+        XCTAssertTrue(succeeded)
+    }
+
+    @MainActor
+    func testMenuBarTransitionDismissesBeforeActivatingWindow() async {
+        var events: [String] = []
+        let activated = expectation(description: "Window presentation activated")
+
+        MenuBarPresentationTransition.switchToWindow(
+            dismiss: { events.append("dismiss") },
+            activateWindow: {
+                events.append("window")
+                activated.fulfill()
+            }
+        )
+
+        XCTAssertEqual(events, ["dismiss"])
+        await fulfillment(of: [activated], timeout: 1)
+        XCTAssertEqual(events, ["dismiss", "window"])
     }
 
     func testPresentationMetadataIsCompleteAndDistinct() {

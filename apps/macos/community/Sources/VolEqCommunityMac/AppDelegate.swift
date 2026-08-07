@@ -5,10 +5,24 @@ import Combine
 import SwiftUI
 import VolEqMacAudio
 
+enum MacActivationPolicyTransition {
+    static func apply(
+        current: NSApplication.ActivationPolicy,
+        desired: NSApplication.ActivationPolicy,
+        setPolicy: (NSApplication.ActivationPolicy) -> Bool
+    ) -> Bool {
+        // NSApplication returns false when no policy change was necessary.
+        // Being at the requested policy is already a successful outcome.
+        current == desired || setPolicy(desired)
+    }
+}
+
 @MainActor
 @available(macOS 14.2, *)
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var presentationSubscription: AnyCancellable?
+    private var audioAccessExplanationSubscription: AnyCancellable?
+    private var audioRuntimeAnnouncementSubscription: AnyCancellable?
     private var consentSubscription: AnyCancellable?
     private var manualUpdateSubscription: AnyCancellable?
     private var releaseOpenFailureSubscription: AnyCancellable?
@@ -18,10 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRestoringPresentation = false
     private var didFinishLaunching = false
     private var isPresentingConsent = false
+    private var isPresentingAudioAccessExplanation = false
     private var isPresentingUpdateResult = false
 
-    private var applicationModel: VolEqApplicationModel {
-        .shared
+    private let applicationModel: VolEqApplicationModel
+
+    override convenience init() {
+        self.init(applicationModel: .shared)
+    }
+
+    init(applicationModel: VolEqApplicationModel) {
+        self.applicationModel = applicationModel
+        super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -29,6 +51,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .removeDuplicates()
             .sink { [weak self] mode in
                 self?.apply(mode)
+            }
+
+        audioAccessExplanationSubscription = applicationModel.systemAudioAccess
+            .$shouldPresentExplanation
+            .removeDuplicates()
+            .filter { $0 }
+            .sink { [weak self] _ in
+                self?.presentSystemAudioAccessExplanation()
+            }
+
+        audioRuntimeAnnouncementSubscription = applicationModel.audio
+            .$runtimeState
+            .removeDuplicates()
+            .filter { state in
+                state == .checkingAccess
+                    || state == .permissionRequired
+                    || state == .failed
+            }
+            .sink { [weak self] state in
+                Task { @MainActor [weak self] in
+                    await Task.yield()
+                    guard let self,
+                          self.applicationModel.audio.runtimeState == state
+                    else { return }
+                    NSAccessibility.post(
+                        element: NSApplication.shared,
+                        notification: .announcementRequested,
+                        userInfo: [
+                            .announcement: self.applicationModel.audio.status,
+                            .priority: NSAccessibilityPriorityLevel.high.rawValue
+                        ]
+                    )
+                }
             }
 
         consentSubscription = applicationModel.updates.$shouldPresentConsent
@@ -84,9 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         applicationModel.updates.applicationWillTerminate()
-        if applicationModel.audio.isRunning {
-            applicationModel.audio.stop()
-        }
+        applicationModel.audio.stop()
     }
 
     func showSettings() {
@@ -108,13 +161,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch mode {
         case .window:
-            guard NSApp.setActivationPolicy(.regular) else {
+            guard MacActivationPolicyTransition.apply(
+                current: NSApp.activationPolicy(),
+                desired: .regular,
+                setPolicy: { NSApp.setActivationPolicy($0) }
+            ) else {
                 recoverFromPresentationFailure(requested: .window, fallback: .menuBar)
                 return
             }
             showUtilityWindow()
         case .menuBar:
-            guard NSApp.setActivationPolicy(.accessory) else {
+            guard MacActivationPolicyTransition.apply(
+                current: NSApp.activationPolicy(),
+                desired: .accessory,
+                setPolicy: { NSApp.setActivationPolicy($0) }
+            ) else {
                 recoverFromPresentationFailure(requested: .menuBar, fallback: .window)
                 return
             }
@@ -176,6 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeUtilityWindowController() -> NSWindowController {
         let rootView = UtilityWindowView(
             model: applicationModel.audio,
+            systemAudioAccess: applicationModel.systemAudioAccess,
             updates: applicationModel.updates,
             openSettings: { [weak self] in self?.showSettings() }
         )
@@ -224,6 +286,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.isPresentingConsent = false
             self.applicationModel.updates.chooseAutomaticCheckConsent(
                 enabled: response == .alertFirstButtonReturn
+            )
+        }
+    }
+
+    private func presentSystemAudioAccessExplanation() {
+        guard !isPresentingAudioAccessExplanation else { return }
+        isPresentingAudioAccessExplanation = true
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = SystemAudioAccessPresentationController.explanationTitle
+        alert.informativeText = SystemAudioAccessPresentationController.explanationCopy
+        alert.addButton(withTitle: "Continue")
+        let notNowButton = alert.addButton(withTitle: "Not Now")
+        notNowButton.keyEquivalent = "\u{1b}"
+        present(alert) { [weak self] response in
+            guard let self else { return }
+            self.isPresentingAudioAccessExplanation = false
+            self.applicationModel.systemAudioAccess.respondToExplanation(
+                continued: response == .alertFirstButtonReturn
             )
         }
     }

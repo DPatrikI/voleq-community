@@ -64,14 +64,27 @@ final class VolEqApplicationModel {
     static let shared = VolEqApplicationModel(defaults: makeDefaults())
 
     let audio: AudioCaptureController
+    let systemAudioAccess: SystemAudioAccessPresentationController
     let presentation: MacPresentationController
     let updates: UpdateController
 
     init(
         defaults: UserDefaults,
-        installedVersion: ApplicationVersion? = nil
+        installedVersion: ApplicationVersion? = nil,
+        systemSettingsOpener: any SystemSettingsOpening = WorkspaceSystemSettingsOpener(),
+        audioController: AudioCaptureController? = nil
     ) {
-        audio = AudioCaptureController()
+        let systemAudioAccess = SystemAudioAccessPresentationController(
+            defaults: defaults,
+            settingsOpener: systemSettingsOpener
+        )
+        self.systemAudioAccess = systemAudioAccess
+        audio = audioController ?? AudioCaptureController(
+            permissionExplanationRequest: { [weak systemAudioAccess] in
+                guard let systemAudioAccess else { return false }
+                return await systemAudioAccess.requestExplanationAcceptance()
+            }
+        )
         presentation = MacPresentationController(defaults: defaults)
         let resolvedVersion: ApplicationVersion
         let checker: any UpdateChecking
