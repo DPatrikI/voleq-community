@@ -7,7 +7,7 @@ Thank you for helping improve VolEq. Focused bug reports, reproducible audio cas
 1. Search existing issues to avoid duplicates.
 2. For substantial features or package-boundary changes, open an issue first.
 3. Do not include private meeting recordings, credentials, proprietary code, or material with unclear licensing.
-4. Keep Premium-only product features out of this public repository; see `docs/EDITIONS.md`.
+4. Keep VolEq Pro-only product features out of this public repository; see `docs/EDITIONS.md`.
 
 ## Development workflow
 

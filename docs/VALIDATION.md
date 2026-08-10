@@ -2,6 +2,27 @@
 
 VolEq changes the audio people hear, so a green build is necessary but not sufficient. Every audio-behavior pull request records deterministic checks here and receives listening validation before merge. Private meeting recordings are never committed.
 
+## Product naming (0.1.1)
+
+The open-source application's installed product name is **VolEq**. Its source
+module, Community repository and release channel, bundle identifier, executable
+name, update endpoint, and persisted identity remain unchanged. The release
+build is assembled as `VolEq.app`; the separately identified contributor build
+is `VolEq Dev.app`; and the Community DMG continues to use a distinguishable
+download filename while containing the cleanly named application. Build and
+packaging scripts share one naming contract and remove only their corresponding
+obsolete generated `VolEq Community*.app` bundle before rebuilding.
+
+Automated evidence on 2026-08-10: the application-metadata regression confirms
+the VolEq display and bundle names alongside the unchanged identifier and
+executable; all 329 Swift tests passed; strict-concurrency production compilation
+with warnings as errors passed; distribution and development bundles passed
+model, branding, property-list, resource, and ad-hoc signature verification;
+release metadata validation and `git diff --check` passed. A notarized DMG was
+not produced on this feature branch. Owner validation remains required for the
+Finder, Dock, application-menu, System Audio Recording, update, and upgrade
+from 0.1.0 presentation before release.
+
 ## Automatic update checks (0.1.1)
 
 Automated validation is deterministic and does not contact live GitHub.
@@ -94,14 +115,15 @@ complete Swift suite passed all 329 tests; the release product
 compiled with complete strict concurrency and warnings as errors;
 `./dev build macos` verified the packaged RNNoise model, branding, ad hoc
 signature, and Info.plist. The contributor run path packages a separately
-identified `VolEq Community Dev.app`, preventing an installed Developer-ID
+identified `VolEq Dev.app`, preventing an installed Developer-ID
 build from being mistaken for the ad-hoc build in System Audio Recording
 settings. The release heartbeat disassembly is only
 `cbz`/`mov`/`ldadd`/`ret`.
 The canonical 48 kHz stereo benchmark used 2.614 seconds of
 thread CPU for 60 seconds of audio (4.36% of one core on
-MacBookPro18,3). Release metadata remained VolEq Community 0.1.0 (1), as
-required for this uncommitted v0.1.1 preparation branch.
+MacBookPro18,3). Version/build metadata remained 0.1.0 (1), and the bundle
+identifier remained `com.patrikistvandoczy.voleq.community`. The product-name
+change affects the installed display name, not version or bundle identity.
 
 The owner confirmed the simplified first-use permission/start flow and an
 extended unattended leveling session in the local development bundle. This is

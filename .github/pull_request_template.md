@@ -12,7 +12,7 @@ Describe the user-visible behavior and the implementation boundary.
 
 - What could regress?
 - What remains unverified?
-- Does this preserve the Community/Premium boundary in `docs/EDITIONS.md`?
+- Does this preserve the VolEq/VolEq Pro boundary in `docs/EDITIONS.md`?
 
 ## Contribution
 

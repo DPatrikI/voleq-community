@@ -1,8 +1,9 @@
 # Compatibility
 
-VolEq Community 0.1.0 is distributed for Apple Silicon and requires macOS 14.2
-or newer. The minimum version is an implementation requirement; the physical
-release matrix below records the systems that were actually exercised.
+VolEq 0.1.0—published with the earlier **VolEq Community** application name—is
+distributed for Apple Silicon and requires macOS 14.2 or newer. The minimum
+version is an implementation requirement; the physical release matrix below
+records the systems that were actually exercised.
 
 ## Physical release matrix
 

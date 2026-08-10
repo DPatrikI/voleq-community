@@ -9,6 +9,7 @@ DMG="$RELEASE_DIRECTORY/VolEq-Community-0.1.0-rc1-macOS-arm64.dmg"
 CHECKSUMS="$RELEASE_DIRECTORY/SHA256SUMS.txt"
 NOTARIZATION_DIRECTORY="$RELEASE_DIRECTORY/notarization"
 OUTSIDE_FILE="$TEMPORARY_ROOT/outside.dmg"
+DEVELOPMENT_INFO_PLIST="$TEMPORARY_ROOT/Development-Info.plist"
 TEST_COUNT=0
 
 cleanup() {
@@ -17,11 +18,45 @@ cleanup() {
 trap cleanup EXIT
 
 source "$REPOSITORY_ROOT/scripts/lib/release-artifacts.zsh"
+source "$REPOSITORY_ROOT/scripts/lib/product-naming.zsh"
 
 pass() {
     (( TEST_COUNT += 1 ))
     print -r -- "ok $TEST_COUNT - $1"
 }
+
+voleq_validate_product_plist \
+    "$REPOSITORY_ROOT/apps/macos/community/Resources/Info.plist" \
+    distribution
+cp \
+    "$REPOSITORY_ROOT/apps/macos/community/Resources/Info.plist" \
+    "$DEVELOPMENT_INFO_PLIST"
+plutil -replace CFBundleDisplayName \
+    -string "$VOLEQ_DEVELOPMENT_PRODUCT_NAME" \
+    "$DEVELOPMENT_INFO_PLIST"
+plutil -replace CFBundleName \
+    -string "$VOLEQ_DEVELOPMENT_PRODUCT_NAME" \
+    "$DEVELOPMENT_INFO_PLIST"
+plutil -replace CFBundleIdentifier \
+    -string "$VOLEQ_DEVELOPMENT_BUNDLE_IDENTIFIER" \
+    "$DEVELOPMENT_INFO_PLIST"
+voleq_validate_product_plist "$DEVELOPMENT_INFO_PLIST" development
+plutil -replace CFBundleDisplayName \
+    -string "VolEq Community Dev" \
+    "$DEVELOPMENT_INFO_PLIST"
+if voleq_validate_product_plist \
+    "$DEVELOPMENT_INFO_PLIST" \
+    development >/dev/null 2>&1; then
+    print -u2 -- "not ok - accepted the legacy development display name"
+    exit 1
+fi
+[[ "$VOLEQ_RELEASE_APP_BUNDLE" == "VolEq.app" ]] \
+    || { print -u2 -- "not ok - unexpected release app bundle"; exit 1; }
+[[ "$VOLEQ_DEVELOPMENT_APP_BUNDLE" == "VolEq Dev.app" ]] \
+    || { print -u2 -- "not ok - unexpected development app bundle"; exit 1; }
+[[ "$VOLEQ_COMMUNITY_ARTIFACT_PREFIX" == "VolEq-Community" ]] \
+    || { print -u2 -- "not ok - unexpected Community artifact prefix"; exit 1; }
+pass "validates release, development, and Community artifact naming"
 
 mkdir -p "$NOTARIZATION_DIRECTORY"
 print -r -- "old dmg" > "$DMG"
