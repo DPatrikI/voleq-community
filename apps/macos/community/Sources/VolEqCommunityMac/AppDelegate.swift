@@ -48,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.init(
             applicationModel: .shared,
             workspaceNotificationCenter: NSWorkspace.shared.notificationCenter,
+            audioStatusAnnouncement: { status in
+                AppDelegate.postAudioStatusAnnouncement(status)
+            },
             terminationReply: { $0.reply(toApplicationShouldTerminate: $1) }
         )
     }
@@ -55,8 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     init(
         applicationModel: VolEqApplicationModel,
         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
-        audioStatusAnnouncement: @escaping @MainActor (String) -> Void =
-            AppDelegate.postAudioStatusAnnouncement,
+        audioStatusAnnouncement: @escaping @MainActor (String) -> Void = {
+            AppDelegate.postAudioStatusAnnouncement($0)
+        },
         terminationReply: @escaping @MainActor (NSApplication, Bool) -> Void = {
             $0.reply(toApplicationShouldTerminate: $1)
         }
