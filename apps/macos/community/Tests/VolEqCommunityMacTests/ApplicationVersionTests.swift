@@ -86,7 +86,7 @@ final class ApplicationVersionTests: XCTestCase {
         }
     }
 
-    func testCommittedApplicationVersionSourceIsStrictAndUnchanged() throws {
+    func testCommittedApplicationMetadataUsesProductNameWithoutChangingIdentity() throws {
         let communityDirectory = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -105,6 +105,16 @@ final class ApplicationVersionTests: XCTestCase {
         XCTAssertEqual(
             try ApplicationVersion(installedVersionString: value).description,
             "0.1.0"
+        )
+        XCTAssertEqual(info["CFBundleDisplayName"] as? String, "VolEq")
+        XCTAssertEqual(info["CFBundleName"] as? String, "VolEq")
+        XCTAssertEqual(
+            info["CFBundleIdentifier"] as? String,
+            "com.patrikistvandoczy.voleq.community"
+        )
+        XCTAssertEqual(
+            info["CFBundleExecutable"] as? String,
+            "VolEqCommunityMac"
         )
     }
 }

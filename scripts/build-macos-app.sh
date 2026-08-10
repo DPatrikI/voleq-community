@@ -3,20 +3,24 @@
 set -euo pipefail
 
 REPOSITORY_ROOT="${0:A:h:h}"
+source "$REPOSITORY_ROOT/scripts/lib/product-naming.zsh"
+
 BUILD_VARIANT="${1:-distribution}"
 case "$BUILD_VARIANT" in
     distribution)
-        APP="$REPOSITORY_ROOT/dist/VolEq Community.app"
+        APP="$REPOSITORY_ROOT/dist/$VOLEQ_RELEASE_APP_BUNDLE"
+        LEGACY_APP="$REPOSITORY_ROOT/dist/$VOLEQ_LEGACY_RELEASE_APP_BUNDLE"
         ;;
     development)
-        APP="$REPOSITORY_ROOT/dist/VolEq Community Dev.app"
+        APP="$REPOSITORY_ROOT/dist/$VOLEQ_DEVELOPMENT_APP_BUNDLE"
+        LEGACY_APP="$REPOSITORY_ROOT/dist/$VOLEQ_LEGACY_DEVELOPMENT_APP_BUNDLE"
         ;;
     *)
         echo "error: expected build variant 'distribution' or 'development'" >&2
         exit 2
         ;;
 esac
-EXECUTABLE="$REPOSITORY_ROOT/.build/release/VolEqCommunityMac"
+EXECUTABLE="$REPOSITORY_ROOT/.build/release/$VOLEQ_EXECUTABLE_NAME"
 SPEECH_RESOURCE_BUNDLE="$REPOSITORY_ROOT/.build/release/VolEq_VolEqSpeech.bundle"
 COMMUNITY_RESOURCES="$REPOSITORY_ROOT/apps/macos/community/Resources"
 INFO_PLIST="$COMMUNITY_RESOURCES/Info.plist"
@@ -32,28 +36,23 @@ env CLANG_MODULE_CACHE_PATH="$REPOSITORY_ROOT/.build/clang-module-cache" \
     "$VOLEQ_SWIFT_BINARY" "$REPOSITORY_ROOT/scripts/generate-macos-icon.swift" --check
 env CLANG_MODULE_CACHE_PATH="$REPOSITORY_ROOT/.build/clang-module-cache" \
     SWIFT_MODULECACHE_PATH="$REPOSITORY_ROOT/.build/swift-module-cache" \
-    "$VOLEQ_SWIFT_BINARY" build --product VolEqCommunityMac -c release
+    "$VOLEQ_SWIFT_BINARY" build --product "$VOLEQ_EXECUTABLE_NAME" -c release
 
-rm -rf "$APP"
+rm -rf "$APP" "$LEGACY_APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$EXECUTABLE" "$APP/Contents/MacOS/VolEqCommunityMac"
+cp "$EXECUTABLE" "$APP/Contents/MacOS/$VOLEQ_EXECUTABLE_NAME"
 cp -R "$SPEECH_RESOURCE_BUNDLE" "$APP/Contents/Resources/VolEq_VolEqSpeech.bundle"
 cp "$INFO_PLIST" "$APP/Contents/Info.plist"
 if [[ "$BUILD_VARIANT" == "development" ]]; then
-    RELEASE_BUNDLE_IDENTIFIER="$(
-        plutil -extract CFBundleIdentifier raw -o - "$INFO_PLIST"
-    )"
-    RELEASE_DISPLAY_NAME="$(
-        plutil -extract CFBundleDisplayName raw -o - "$INFO_PLIST"
-    )"
     plutil -replace CFBundleIdentifier \
-        -string "$RELEASE_BUNDLE_IDENTIFIER.development" \
+        -string "$VOLEQ_DEVELOPMENT_BUNDLE_IDENTIFIER" \
         "$APP/Contents/Info.plist"
-    plutil -replace CFBundleDisplayName -string "$RELEASE_DISPLAY_NAME Dev" \
+    plutil -replace CFBundleDisplayName -string "$VOLEQ_DEVELOPMENT_PRODUCT_NAME" \
         "$APP/Contents/Info.plist"
-    plutil -replace CFBundleName -string "$RELEASE_DISPLAY_NAME Dev" \
+    plutil -replace CFBundleName -string "$VOLEQ_DEVELOPMENT_PRODUCT_NAME" \
         "$APP/Contents/Info.plist"
 fi
+voleq_validate_product_plist "$APP/Contents/Info.plist" "$BUILD_VARIANT"
 for (( INDEX = 1; INDEX <= ${#BRAND_RESOURCE_KEYS[@]}; INDEX++ )); do
     RESOURCE_KEY="${BRAND_RESOURCE_KEYS[$INDEX]}"
     EXPECTED_EXTENSION="${BRAND_RESOURCE_EXTENSIONS[$INDEX]}"
@@ -79,8 +78,8 @@ printf '%s  %s\n' \
     "1b99898350e75656c77d068162fea402afe51eff15dc751989b1e9f53b98bf91" \
     "$APP/Contents/Resources/VolEq_VolEqSpeech.bundle/rnnoise-model.bin" \
     | shasum -a 256 --check --status
-"$APP/Contents/MacOS/VolEqCommunityMac" --verify-speech-resources
-"$APP/Contents/MacOS/VolEqCommunityMac" --verify-app-resources
+"$APP/Contents/MacOS/$VOLEQ_EXECUTABLE_NAME" --verify-speech-resources
+"$APP/Contents/MacOS/$VOLEQ_EXECUTABLE_NAME" --verify-app-resources
 codesign --force --sign - "$APP"
 plutil -lint "$APP/Contents/Info.plist"
 codesign --verify --deep --strict "$APP"

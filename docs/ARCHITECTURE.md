@@ -379,7 +379,8 @@ The macOS shell maintains these presentation invariants:
 - Core, DSP, and Speech must not depend on macOS UI or Core Audio APIs.
 - Platform adapters may depend on Core, DSP, and Speech.
 - Product apps depend on platform adapters and may compose shared packages.
-- Premium-only files must live in the separate private repository; public MPL-covered files are consumed as dependencies rather than copied or forked.
+- VolEq Pro-only files must live in the separate private repository; public
+  MPL-covered files are consumed as dependencies rather than copied or forked.
 - New internal DSP and speech types remain package-private implementation
   boundaries; no public API or `Package.swift` interface is added for them.
 

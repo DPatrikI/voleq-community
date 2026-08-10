@@ -57,6 +57,10 @@ separate in [VALIDATION.md](VALIDATION.md).
 - continue accessibility and recovery-guidance refinement;
 - add platform adapters only when they can be maintained and tested.
 
-## Premium exploration
+## VolEq Pro exploration
 
-Premium development starts only after the Community path is stable enough to validate the shared engine. App Sandbox feasibility for the capture/mute/process/reinject topology must be proven before committing to Mac App Store distribution. Direct signed and notarized distribution remains a fallback.
+VolEq Pro development starts only after the open-source VolEq path is stable
+enough to validate the shared engine. App Sandbox feasibility for the
+capture/mute/process/reinject topology must be proven before committing to Mac
+App Store distribution. Direct signed and notarized distribution remains a
+fallback.

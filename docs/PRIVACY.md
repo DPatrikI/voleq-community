@@ -1,7 +1,7 @@
 # Privacy
 
 VolEq processes captured application or device audio locally on the Mac. The
-Community application does not record captured audio, write it to disk, upload
+open-source application does not record captured audio, write it to disk, upload
 it, send it to an online service, or use it for telemetry.
 
 Before the first processing attempt, VolEq explains why System Audio Recording
@@ -55,6 +55,6 @@ VolEq's own process to prevent feedback. The always-visible **No sound?** help
 opens the relevant System Settings page and repeats the local-only privacy
 guarantee.
 
-This describes the current Community source tree. A future Premium application
-must document any additional diagnostics or services separately before they are
-introduced.
+This describes the current Community source tree. A future VolEq Pro
+application must document any additional diagnostics or services separately
+before they are introduced.

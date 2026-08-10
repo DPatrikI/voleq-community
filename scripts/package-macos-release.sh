@@ -3,8 +3,10 @@
 set -euo pipefail
 
 REPOSITORY_ROOT="${0:A:h:h}"
-APP="$REPOSITORY_ROOT/dist/VolEq Community.app"
-EXECUTABLE="$APP/Contents/MacOS/VolEqCommunityMac"
+source "$REPOSITORY_ROOT/scripts/lib/product-naming.zsh"
+
+APP="$REPOSITORY_ROOT/dist/$VOLEQ_RELEASE_APP_BUNDLE"
+EXECUTABLE="$APP/Contents/MacOS/$VOLEQ_EXECUTABLE_NAME"
 INFO_PLIST="$REPOSITORY_ROOT/apps/macos/community/Resources/Info.plist"
 RELEASE_DIRECTORY="$REPOSITORY_ROOT/dist/release"
 NOTARIZATION_DIRECTORY="$RELEASE_DIRECTORY/notarization"
@@ -32,7 +34,7 @@ if [[ -n "$ARTIFACT_SUFFIX" && ! "$ARTIFACT_SUFFIX" =~ '^[A-Za-z0-9][A-Za-z0-9.-
     fail "VOLEQ_RELEASE_SUFFIX must contain only letters, numbers, periods, and hyphens"
 fi
 
-ARTIFACT_LABEL="VolEq-Community-$VERSION"
+ARTIFACT_LABEL="$VOLEQ_COMMUNITY_ARTIFACT_PREFIX-$VERSION"
 if [[ -n "$ARTIFACT_SUFFIX" ]]; then
     ARTIFACT_LABEL="$ARTIFACT_LABEL-$ARTIFACT_SUFFIX"
 fi
@@ -89,6 +91,10 @@ EOF
 "$REPOSITORY_ROOT/scripts/build-macos-app.sh" >/dev/null
 
 [[ -f "$EXECUTABLE" ]] || fail "release executable was not built"
+[[ "${APP:t}" == "$VOLEQ_RELEASE_APP_BUNDLE" ]] \
+    || fail "release application bundle has an unexpected name"
+voleq_validate_product_plist "$APP/Contents/Info.plist" distribution \
+    || fail "release application identity is invalid"
 ARCHITECTURES="$(lipo -archs "$EXECUTABLE")"
 [[ "$ARCHITECTURES" == "arm64" ]] \
     || fail "v0.1.0 must contain exactly the arm64 architecture; found: $ARCHITECTURES"
@@ -119,7 +125,7 @@ grep -Eq '^Timestamp=' <<< "$SIGNATURE_DETAILS" \
 [[ -z "$(codesign -d --entitlements - "$APP" 2>/dev/null)" ]] \
     || fail "release application contains unexpected entitlements"
 
-SIGNED_APP_ZIP="$WORK_DIRECTORY/VolEq-Community-$VERSION-signed-app.zip"
+SIGNED_APP_ZIP="$WORK_DIRECTORY/$VOLEQ_COMMUNITY_ARTIFACT_PREFIX-$VERSION-signed-app.zip"
 ditto -c -k --keepParent "$APP" "$SIGNED_APP_ZIP"
 
 APP_SUBMISSION="$NOTARIZATION_DIRECTORY/app-submission.json"
@@ -142,11 +148,11 @@ spctl --assess --type execute --verbose=4 "$APP"
 
 STAGING_DIRECTORY="$WORK_DIRECTORY/dmg-root"
 mkdir -p "$STAGING_DIRECTORY"
-ditto "$APP" "$STAGING_DIRECTORY/VolEq Community.app"
+ditto "$APP" "$STAGING_DIRECTORY/$VOLEQ_RELEASE_APP_BUNDLE"
 ln -s /Applications "$STAGING_DIRECTORY/Applications"
 
 hdiutil create \
-    -volname "VolEq Community $VERSION" \
+    -volname "$VOLEQ_PRODUCT_NAME $VERSION" \
     -srcfolder "$STAGING_DIRECTORY" \
     -format UDZO \
     -ov \
@@ -184,7 +190,7 @@ spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG
     shasum -a 256 --check "${CHECKSUMS:t}"
 )
 
-echo "Packaged VolEq Community $VERSION ($BUILD)"
+echo "Packaged VolEq $VERSION ($BUILD) from the Community repository"
 echo "Source commit: $SOURCE_COMMIT"
 echo "Bundle identifier: $BUNDLE_IDENTIFIER"
 echo "DMG: $DMG"

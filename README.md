@@ -4,14 +4,16 @@ VolEq automatically levels voice volume so quiet speakers are easier to hear
 and loud speakers are less overwhelming.
 
 <p align="center">
-  <img src="docs/assets/voleq-community-window.png" width="560" alt="VolEq Community window showing stopped device-wide capture with speech-aware leveling enabled">
+  <img src="docs/assets/voleq-community-window.png" width="560" alt="VolEq window showing stopped device-wide capture with speech-aware leveling enabled">
 </p>
 
 ## Download and install
 
 Download the Apple Silicon DMG from
 [GitHub Releases](https://github.com/DPatrikI/voleq-community/releases), open it,
-and drag **VolEq Community** to **Applications**. Launch the installed app and
+and drag **VolEq** to **Applications**. The published 0.1.0 DMG still labels the
+application **VolEq Community**; the shorter product name begins with 0.1.1.
+Launch the installed app and
 start audio in the application you want to level, choose Start, and follow the
 macOS System Audio Recording prompt.
 
@@ -35,13 +37,15 @@ not provide VolEq with a separate permission-status API, so VolEq does not try
 to infer the setting from captured samples. The always-available **No sound?**
 help opens the correct System Settings page if playback is missing.
 
-VolEq Community 0.1.0 requires an Apple Silicon Mac running macOS 14.2 or newer.
+The published 0.1.0 build requires an Apple Silicon Mac running macOS 14.2 or newer.
 See the [tested compatibility matrix](docs/COMPATIBILITY.md) for the exact Macs,
 meeting apps, wired outputs, and Bluetooth devices covered before release.
 
-To remove VolEq, first stop leveling and quit the app, then move
-`VolEq Community.app` from Applications to the Trash. Its System Audio Recording
-permission can be removed separately in System Settings.
+To remove VolEq, first stop leveling and quit the app, then move `VolEq.app`
+from Applications to the Trash. If upgrading from 0.1.0, remove the old
+`VolEq Community.app` first so macOS does not retain two copies with the same
+bundle identifier. Its System Audio Recording permission can be removed
+separately in System Settings.
 
 ## What it does
 
@@ -93,12 +97,12 @@ Building requires Xcode or Apple Command Line Tools with Swift 5.10 or newer.
 ```
 
 `./dev build macos` assembles the release-shaped, ad-hoc-signed artifact at
-`dist/VolEq Community.app`. `./dev run macos` launches a separately identified
-`dist/VolEq Community Dev.app`, so its local System Audio Recording grant cannot
+`dist/VolEq.app`. `./dev run macos` launches a separately identified
+`dist/VolEq Dev.app`, so its local System Audio Recording grant cannot
 be confused with an installed release. Ad-hoc signatures identify one exact
 build: after rebuilding the development app, macOS may require access to be
 granted again. If it asks you to quit and reopen the app after granting access,
-run `open "dist/VolEq Community Dev.app"` so the permitted binary is relaunched
+run `open "dist/VolEq Dev.app"` so the permitted binary is relaunched
 without another rebuild. Official Developer ID signing and notarization use the
 maintainer-only `./dev package macos` workflow documented in
 [RELEASING.md](docs/RELEASING.md).
@@ -149,9 +153,9 @@ never records, saves, uploads, or sends it as telemetry, and provides an
 **Open System Settings…** button for **Privacy & Security → Screen & System
 Audio Recording**.
 
-For a source build, grant access to **VolEq Community Dev**, not an installed
-**VolEq Community** release. After granting access, relaunch the already built
-binary with `open "dist/VolEq Community Dev.app"`; running another build first
+For a source build, grant access to **VolEq Dev**, not an installed **VolEq**
+release. After granting access, relaunch the already built binary with
+`open "dist/VolEq Dev.app"`; running another build first
 changes an ad-hoc app's code identity and may require a new grant.
 
 macOS owns the permission state and prompt. VolEq deliberately does not infer
@@ -181,12 +185,12 @@ uses callback progress rather than display state. If any uncertain recovery
 case silences original audio or reports Active without sound, stop or quit
 VolEq and report the output device, capture mode, and sleep method used.
 
-## Community edition
+## Open-source and Pro editions
 
-This repository contains the useful, buildable open-source edition. VolEq
-Premium is planned as a separate application for advanced controls, profiles,
-automation, automatic switching, and commercial support—not a better version of
-the core processor. See [EDITIONS.md](docs/EDITIONS.md).
+This Community repository builds the complete open-source application named
+**VolEq**. **VolEq Pro** is planned as a separate application for advanced
+controls, profiles, automation, automatic switching, and commercial support—not
+a better version of the core processor. See [EDITIONS.md](docs/EDITIONS.md).
 
 ## Project documentation
 

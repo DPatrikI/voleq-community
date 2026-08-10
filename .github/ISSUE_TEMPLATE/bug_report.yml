@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible VolEq Community problem
+description: Report a reproducible VolEq problem
 title: "[Bug]: "
 labels:
   - bug

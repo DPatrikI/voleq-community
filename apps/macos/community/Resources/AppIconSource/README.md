@@ -1,4 +1,4 @@
-# VolEq Premium App Icon Sources
+# VolEq App Icon Sources
 
 These first-party branding files and their generated outputs are not licensed
 under MPL-2.0. `TRADEMARKS.md` records their copyright, the narrow permission
@@ -12,8 +12,9 @@ by the VolEq project author:
 - `premium-background.png` is the paid-flavor adaptive-icon background from
   `app/src/paid/res/mipmap-xxxhdpi/ic_launcher_backgrounderer.png`.
 
-The paid flavor overrides only the background, so these layers together are the
-original premium icon. `scripts/generate-macos-icon.swift` composes them into a
+The original Android paid flavor overrides only the background, so these layers
+together are the source of the current VolEq icon.
+`scripts/generate-macos-icon.swift` composes them into a
 macOS rounded-square icon without generative edits or changes to the mark or
 colors. The generated `.icns` is the system application icon and supplies the
 in-window brand mark through `NSApplication`. The generated PNG is an

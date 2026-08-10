@@ -219,7 +219,7 @@ func validateCaptureAudioFormat(
         let description = channelCount == 1 ? "channel" : "channels"
         throw VolEqError.unsupportedFormat(
             "\(label) exposes \(channelCount) \(description). "
-                + "VolEq Community currently supports mono and stereo audio only, "
+                + "VolEq currently supports mono and stereo audio only, "
                 + "so processing was not started."
         )
     }

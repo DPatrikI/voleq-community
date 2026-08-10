@@ -12,9 +12,13 @@ MPL-2.0 uses file-level copyleft. If a covered source file is distributed after 
 
 Contributions are accepted under the repository's existing license. Contributors certify their right to contribute using a Developer Certificate of Origin sign-off; no Contributor License Agreement is currently required.
 
-## Premium repository
+## VolEq Pro repository
 
-The future Premium repository is intended to keep its original, separate files proprietary while consuming released Community packages. Premium must not silently copy public files into a private fork or remove MPL notices. Any distributed modifications to MPL-covered files must be made available as required by the license.
+The future VolEq Pro repository is intended to keep its original, separate
+files proprietary while consuming released packages from the Community
+repository. VolEq Pro must not silently copy public files into a private fork
+or remove MPL notices. Any distributed modifications to MPL-covered files must
+be made available as required by the license.
 
 ## Trademarks
 

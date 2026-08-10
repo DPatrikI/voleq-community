@@ -1,4 +1,4 @@
-# Releasing VolEq Community
+# Releasing VolEq from the Community repository
 
 Official macOS releases are built locally from a clean, reviewed `master`
 commit. Normal contributor builds remain ad-hoc signed; release packaging
@@ -71,7 +71,7 @@ dist/release/notarization/
 ```
 
 The notarization directory is ignored build evidence. Inspect both notarization
-logs even when Apple accepts the submissions. Mount the DMG, drag the app to
+logs even when Apple accepts the submissions. Mount the DMG, drag **VolEq** to
 Applications, and smoke-test the packaged application before approving the PR.
 
 ## Final artifact and tag
@@ -90,9 +90,10 @@ an annotated `v0.1.0` tag on the verified merge commit. Push the tag only after
 explicit owner authorization and wait for its CI run before publishing the
 GitHub Release.
 
-Attach the DMG and `SHA256SUMS.txt` to a normal GitHub Release titled
-`VolEq Community 0.1.0`. Keep the release as a draft until the owner verifies
-the rendered notes, downloadable assets, and checksum.
+Attach the DMG and `SHA256SUMS.txt` to a normal GitHub Release. The historical
+0.1.0 release remains titled `VolEq Community 0.1.0`; releases using the renamed
+application use `VolEq <version>`. Keep the release as a draft until the owner
+verifies the rendered notes, downloadable assets, and checksum.
 
 ## Failure handling
 

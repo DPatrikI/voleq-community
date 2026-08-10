@@ -63,7 +63,7 @@ final class CoreAudioFormatValidationTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error.localizedDescription,
-                "Captured audio exposes 0 channels. VolEq Community currently supports mono and stereo audio only, so processing was not started."
+                "Captured audio exposes 0 channels. VolEq currently supports mono and stereo audio only, so processing was not started."
             )
         }
     }
@@ -74,7 +74,7 @@ final class CoreAudioFormatValidationTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error.localizedDescription,
-                "Output device exposes 6 channels. VolEq Community currently supports mono and stereo audio only, so processing was not started."
+                "Output device exposes 6 channels. VolEq currently supports mono and stereo audio only, so processing was not started."
             )
         }
     }

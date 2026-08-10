@@ -21,8 +21,9 @@ a modified product as an official VolEq build.
 
 Copyright © 2026 Patrik Dóczy. Permission is granted to reproduce and
 redistribute these listed assets and official screenshots, without
-modification, as part of an unmodified official VolEq Community source
-checkout, source archive, build, or factual reference to the official project.
+modification, as part of an unmodified official VolEq Community repository
+checkout, source archive, VolEq build, or factual reference to the official
+project.
 This permission does not grant a right to use the assets separately, to brand
 modified builds or forks, or to imply project endorsement. Contact the
 repository owner for any other use, including commercial branding use.

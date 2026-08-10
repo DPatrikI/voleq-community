@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a focused Community improvement
+description: Propose a focused improvement to VolEq
 title: "[Feature]: "
 labels:
   - enhancement
@@ -27,5 +27,7 @@ body:
     attributes:
       label: Edition boundary
       options:
-        - label: I reviewed docs/EDITIONS.md and explained why this belongs in Community.
+        - label: >-
+            I reviewed docs/EDITIONS.md and explained why this belongs in the
+            open-source VolEq application.
           required: true

@@ -1,12 +1,12 @@
 # Changelog
 
-Notable changes to VolEq Community are recorded here. The project follows
+Notable changes to VolEq are recorded here. The project follows
 [Semantic Versioning](https://semver.org/); releases before 1.0 may still change
 their public interfaces as the supported platform set grows.
 
 ## [Unreleased]
 
-Intended for VolEq Community 0.1.1. The application and build versions remain
+Intended for VolEq 0.1.1. The application and build versions remain
 unchanged until the separate release branch.
 
 ### Added
@@ -32,6 +32,13 @@ unchanged until the separate release branch.
 - Equivalent accessible Paused for System Sleep, Restoring Leveling, and
   Leveling Did Not Resume states with a user-controlled Try Again action in the
   utility window and menu-bar popover.
+
+### Changed
+
+- The installed open-source application is now named **VolEq**. The repository,
+  bundle identifier, source-module names, and Community distribution channel
+  remain unchanged; the planned paid application will use the distinct
+  **VolEq Pro** name.
 
 ### Fixed
 
