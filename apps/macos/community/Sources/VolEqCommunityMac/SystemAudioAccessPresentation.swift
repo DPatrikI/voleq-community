@@ -13,6 +13,11 @@ struct WorkspaceSystemSettingsOpener: SystemSettingsOpening {
     }
 }
 
+enum SystemAudioSettingsNavigationOutcome: Equatable {
+    case opened
+    case failed(manualInstructions: String)
+}
+
 @MainActor
 final class SystemAudioAccessPresentationController: ObservableObject {
     static let explanationAcceptedKey = "systemAudioAccessExplanationAccepted"
@@ -90,17 +95,19 @@ final class SystemAudioAccessPresentationController: ObservableObject {
         continuation.resume(returning: false)
     }
 
-    func openSystemAudioRecordingSettings() {
+    func openSystemAudioRecordingSettings() -> SystemAudioSettingsNavigationOutcome {
         if let directURL = URL(
             string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture"
         ), settingsOpener.open(directURL) {
-            return
+            return .opened
         }
 
         if let privacyURL = URL(
             string: "x-apple.systempreferences:com.apple.preference.security"
-        ) {
-            _ = settingsOpener.open(privacyURL)
+        ), settingsOpener.open(privacyURL) {
+            return .opened
         }
+
+        return .failed(manualInstructions: Self.manualSettingsPath)
     }
 }

@@ -398,10 +398,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.isPresentingNoSoundHelp = false
             self.applicationModel.systemAudioAccess.dismissNoSoundHelp()
             if response == .alertFirstButtonReturn {
-                self.applicationModel.systemAudioAccess
+                let outcome = self.applicationModel.systemAudioAccess
                     .openSystemAudioRecordingSettings()
+                if case let .failed(manualInstructions) = outcome {
+                    self.presentSystemAudioSettingsOpenFailure(
+                        manualInstructions: manualInstructions
+                    )
+                }
             }
         }
+    }
+
+    private func presentSystemAudioSettingsOpenFailure(
+        manualInstructions: String
+    ) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Couldn’t Open System Settings"
+        alert.informativeText = manualInstructions
+        alert.addButton(withTitle: "OK")
+        present(alert) { _ in }
     }
 
     private func presentManualUpdateResult(

@@ -132,13 +132,14 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
             settingsOpener: opener
         )
 
-        controller.openSystemAudioRecordingSettings()
+        let outcome = controller.openSystemAudioRecordingSettings()
 
+        XCTAssertEqual(outcome, .opened)
         XCTAssertEqual(opener.openedURLs.count, 1)
         XCTAssertTrue(opener.openedURLs[0].absoluteString.contains("Privacy_ScreenCapture"))
     }
 
-    func testSettingsNavigationFailureOpensPrivacyAndShowsManualPath() throws {
+    func testDirectNavigationFailureFallsBackToPrivacySettings() throws {
         let defaults = try makeDefaults()
         defer { removeTestDefaults(defaults) }
         let opener = RecordingSystemSettingsOpener(results: [false, true])
@@ -147,13 +148,14 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
             settingsOpener: opener
         )
 
-        controller.openSystemAudioRecordingSettings()
+        let outcome = controller.openSystemAudioRecordingSettings()
 
+        XCTAssertEqual(outcome, .opened)
         XCTAssertEqual(opener.openedURLs.count, 2)
         XCTAssertTrue(opener.openedURLs[1].absoluteString.contains("preference.security"))
     }
 
-    func testSettingsNavigationTotalFailureIsExplicit() throws {
+    func testSettingsNavigationTotalFailureReturnsManualInstructions() throws {
         let defaults = try makeDefaults()
         defer { removeTestDefaults(defaults) }
         let opener = RecordingSystemSettingsOpener(results: [false, false])
@@ -162,12 +164,20 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
             settingsOpener: opener
         )
 
-        controller.openSystemAudioRecordingSettings()
+        let outcome = controller.openSystemAudioRecordingSettings()
 
         XCTAssertEqual(opener.openedURLs.count, 2)
-        XCTAssertTrue(SystemAudioAccessPresentationController.manualSettingsPath.contains(
-            "Screen & System Audio Recording"
-        ))
+        XCTAssertEqual(
+            outcome,
+            .failed(
+                manualInstructions: SystemAudioAccessPresentationController
+                    .manualSettingsPath
+            )
+        )
+        guard case let .failed(manualInstructions) = outcome else {
+            return XCTFail("Total navigation failure must surface manual instructions")
+        }
+        XCTAssertTrue(manualInstructions.contains("Screen & System Audio Recording"))
     }
 
     func testUsageDescriptionUsesRequiredPrivacyCopy() throws {
