@@ -187,6 +187,10 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
 
     @available(macOS 14.2, *)
     func testMenuBarSurfaceRendersFullViewport() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+            "AppKit pixel evidence requires a WindowServer-backed local session; behavioral surface coverage still runs in GitHub Actions."
+        )
         let defaults = try makeDefaults()
         defer { removeTestDefaults(defaults) }
         let hostingView = makeMenuBarHostingView(defaults: defaults)

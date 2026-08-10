@@ -30,7 +30,11 @@ private final class AdvancingAudioLifecycleTime:
 
 private struct SuspendedAudioLifecycleScheduler: AudioLifecycleScheduling {
     func sleep(nanoseconds: UInt64) async throws {
-        try await Task.sleep(nanoseconds: UInt64.max)
+        // `UInt64.max` is not a portable "sleep forever" value: older Swift
+        // runtimes can reject it immediately instead of suspending. This
+        // deadline is deliberately much longer than the focused test and is
+        // cancelled as soon as the immediate observation completes.
+        try await Task.sleep(nanoseconds: 60_000_000_000)
     }
 }
 
