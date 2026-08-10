@@ -33,7 +33,11 @@ struct VolEqCommunityMacApp: App {
                 model: applicationModel.audio,
                 systemAudioAccess: applicationModel.systemAudioAccess,
                 updates: updates,
-                openSettings: { appDelegate.showSettings() },
+                actions: ApplicationShellActions(
+                    updates: updates,
+                    openSettings: { appDelegate.showSettings() },
+                    quit: { NSApp.terminate(nil) }
+                ),
                 switchToWindow: { presentation.mode = .window }
             )
         } label: {
@@ -51,7 +55,11 @@ struct VolEqCommunityMacApp: App {
                         : "Check for Updates…"
                 ) {
                     Task {
-                        await updates.checkManually()
+                        await ApplicationShellActions(
+                            updates: updates,
+                            openSettings: { appDelegate.showSettings() },
+                            quit: { NSApp.terminate(nil) }
+                        ).checkForUpdates()
                     }
                 }
                 .disabled(updates.isChecking)

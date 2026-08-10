@@ -46,8 +46,8 @@ case "$COMMAND" in
         ;;
     run)
         require_macos
-        "$REPOSITORY_ROOT/scripts/build-macos-app.sh"
-        open "$REPOSITORY_ROOT/dist/VolEq Community.app"
+        "$REPOSITORY_ROOT/scripts/build-macos-app.sh" development
+        open "$REPOSITORY_ROOT/dist/VolEq Community Dev.app"
         ;;
     package)
         require_macos

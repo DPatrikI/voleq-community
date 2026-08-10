@@ -9,14 +9,11 @@ import XCTest
 @available(macOS 14.2, *)
 @MainActor
 final class ApplicationTerminationAudioSafetyTests: XCTestCase {
-    func testApplicationTerminationCancelsAndTearsDownActiveProbe() async throws {
-        let probe = TerminationSuspendedPermissionProbe()
-        let audio = AudioCaptureController(
-            installSystemObservers: false,
-            startPipelineOverride: { _ in },
-            permissionProbeFactory: { _ in probe }
-        )
-        let suite = "VolEqTerminationTests.\(UUID().uuidString)"
+    func testApplicationTerminationDuringWakeRecoveryPreventsRestart() async throws {
+        let rig = AppAudioTestRig()
+        rig.blocksRouteRecovery = true
+        let audio = rig.makeController()
+        let suite = "VolEqTerminationRecoveryTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let model = VolEqApplicationModel(
@@ -25,43 +22,67 @@ final class ApplicationTerminationAudioSafetyTests: XCTestCase {
             audioController: audio
         )
         let delegate = AppDelegate(applicationModel: model)
-
+        audio.mode = .system
         audio.start()
-        for _ in 0..<2_000 {
-            if audio.runtimeState == .checkingAccess { break }
-            await Task.yield()
-        }
+        await waitForAudio(audio, state: .active)
+        audio.prepareForSystemSleep()
+        audio.resumeAfterSystemWake()
+        await waitForAudio(audio, state: .recovering)
+
         delegate.applicationWillTerminate(
             Notification(name: NSApplication.willTerminateNotification)
         )
-
-        XCTAssertEqual(probe.cancelCount, 1)
-        XCTAssertTrue(probe.isTornDown)
-        XCTAssertFalse(audio.isRunning)
         XCTAssertEqual(audio.runtimeState, .stopped)
+        XCTAssertFalse(audio.isRunning)
+        XCTAssertEqual(rig.pipelines.count, 1)
     }
-}
 
-@MainActor
-private final class TerminationSuspendedPermissionProbe:
-    SystemAudioPermissionProbing {
-    private var continuation: CheckedContinuation<
-        SystemAudioPermissionProbeOutcome,
-        Never
-    >?
-    private(set) var cancelCount = 0
-    private(set) var isTornDown = false
+    func testWillTerminateDoesNotRepeatCompletedTerminateLaterTeardown() async throws {
+        let rig = AppAudioTestRig()
+        let audio = rig.makeController()
+        let suite = "VolEqCompletedTerminationTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = VolEqApplicationModel(
+            defaults: defaults,
+            installedVersion: .zero,
+            audioController: audio
+        )
+        var terminationReply: Bool?
+        let delegate = AppDelegate(
+            applicationModel: model,
+            terminationReply: { _, shouldTerminate in
+                terminationReply = shouldTerminate
+            }
+        )
+        audio.mode = .system
+        audio.start()
+        await waitForAudio(audio, state: .active)
 
-    func verify() async -> SystemAudioPermissionProbeOutcome {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
+        XCTAssertEqual(
+            delegate.applicationShouldTerminate(NSApplication.shared),
+            .terminateLater
+        )
+        for _ in 0..<2_000 where terminationReply == nil {
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
+        XCTAssertEqual(terminationReply, true)
+        XCTAssertEqual(rig.pipelines.first?.stopCount, 1)
+
+        delegate.applicationWillTerminate(
+            Notification(name: NSApplication.willTerminateNotification)
+        )
+        XCTAssertEqual(rig.pipelines.first?.stopCount, 1)
     }
 
-    func cancel() {
-        cancelCount += 1
-        isTornDown = true
-        continuation?.resume(returning: .cancelled)
-        continuation = nil
+    private func waitForAudio(
+        _ audio: AudioCaptureController,
+        state: CaptureRuntimeState
+    ) async {
+        for _ in 0..<2_000 {
+            if audio.runtimeState == state { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Timed out waiting for application audio state \(state)")
     }
 }

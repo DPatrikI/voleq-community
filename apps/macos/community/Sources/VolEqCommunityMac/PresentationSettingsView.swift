@@ -6,6 +6,7 @@ import SwiftUI
 struct PresentationSettingsView: View {
     @ObservedObject var presentation: MacPresentationController
     @ObservedObject var updates: UpdateController
+    let actions: ApplicationShellActions
 
     var body: some View {
         Form {
@@ -58,7 +59,7 @@ struct PresentationSettingsView: View {
 
                         if let update = updates.knownAvailableUpdate {
                             Button("View VolEq \(update.version.description) Release…") {
-                                _ = updates.openRelease(update)
+                                actions.viewRelease(update)
                             }
                             .buttonStyle(.link)
                         }
@@ -73,7 +74,7 @@ struct PresentationSettingsView: View {
                     }
 
                     Button("Check Now") {
-                        Task { await updates.checkManually() }
+                        Task { await actions.checkForUpdates() }
                     }
                     .disabled(updates.isChecking)
                     .accessibilityHint("Contacts GitHub to check the latest published VolEq release")

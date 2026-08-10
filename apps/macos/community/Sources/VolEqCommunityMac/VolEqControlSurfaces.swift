@@ -10,7 +10,7 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
     @ObservedObject var model: Model
     @ObservedObject var systemAudioAccess: SystemAudioAccessPresentationController
     @ObservedObject var updates: UpdateController
-    let openSettings: () -> Void
+    let actions: ApplicationShellActions
 
     var body: some View {
         ScrollView {
@@ -30,13 +30,16 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
 
                 RuntimeStatusView(model: model, compact: false)
 
-                AudioAccessActions(
+                AudioSafetyActions(
                     model: model,
-                    systemAudioAccess: systemAudioAccess,
-                    compact: false
+                    actions: actions
                 )
 
-                UpdateAvailableIndicator(updates: updates, compact: false)
+                UpdateAvailableIndicator(
+                    updates: updates,
+                    actions: actions,
+                    compact: false
+                )
 
                 if updates.isChecking {
                     HStack(spacing: 8) {
@@ -54,20 +57,17 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
 
                 CaptureControls(model: model, compact: false)
 
-                Button {
-                    model.toggle()
-                } label: {
-                    Text(model.isRunning ? "Stop Leveling" : "Start Leveling")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(!model.isRunning && !model.canStart)
-                .keyboardShortcut(.defaultAction)
+                CapturePrimaryActionButton(
+                    model: model,
+                    compact: false,
+                    fillsWidth: true,
+                    isDefaultAction: true
+                )
 
                 HStack {
+                    NoSoundButton(systemAudioAccess: systemAudioAccess)
                     Spacer()
-                    Button(action: openSettings) {
+                    Button(action: actions.openSettings) {
                         Label("Settings", systemImage: "gearshape")
                     }
                     .buttonStyle(.bordered)
@@ -86,7 +86,7 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
     @ObservedObject var model: Model
     @ObservedObject var systemAudioAccess: SystemAudioAccessPresentationController
     @ObservedObject var updates: UpdateController
-    let openSettings: () -> Void
+    let actions: ApplicationShellActions
     let switchToWindow: () -> Void
 
     var body: some View {
@@ -98,32 +98,36 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
                 HStack(alignment: .center, spacing: 12) {
                     RuntimeStatusView(model: model, compact: true)
                     Spacer(minLength: 12)
-                    Button(model.isRunning ? "Stop" : "Start") {
-                        model.toggle()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!model.isRunning && !model.canStart)
+                    CapturePrimaryActionButton(
+                        model: model,
+                        compact: true,
+                        fillsWidth: false,
+                        isDefaultAction: false
+                    )
                 }
 
-                AudioAccessActions(
+                AudioSafetyActions(
                     model: model,
-                    systemAudioAccess: systemAudioAccess,
-                    compact: true
+                    actions: actions
                 )
 
                 Divider()
 
                 CaptureControls(model: model, compact: true)
 
-                UpdateAvailableIndicator(updates: updates, compact: true)
+                UpdateAvailableIndicator(
+                    updates: updates,
+                    actions: actions,
+                    compact: true
+                )
 
                 Divider()
 
                 HStack {
                     Button("Check for Updates…") {
-                        Task { await updates.checkManually() }
+                        Task { await actions.checkForUpdates() }
                     }
+                    .accessibilityIdentifier("voleq.check-for-updates")
                     .buttonStyle(.plain)
                     .disabled(updates.isChecking)
 
@@ -137,26 +141,31 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
                 }
 
                 HStack {
+                    NoSoundButton(systemAudioAccess: systemAudioAccess)
+
+                    Spacer()
+
                     Button("Switch to Window") {
                         MenuBarPresentationTransition.switchToWindow(
                             dismiss: { dismiss() },
                             activateWindow: switchToWindow
                         )
                     }
+                    .accessibilityIdentifier("voleq.switch-to-window")
                     .buttonStyle(.plain)
 
-                    Spacer()
-
-                    Button(action: openSettings) {
+                    Button(action: actions.openSettings) {
                         Label("Settings…", systemImage: "gearshape")
                     }
+                    .accessibilityIdentifier("voleq.open-settings")
                     .buttonStyle(.plain)
                     .foregroundStyle(.primary)
                 }
 
                 Button("Quit VolEq") {
-                    NSApp.terminate(nil)
+                    actions.quit()
                 }
+                .accessibilityIdentifier("voleq.quit")
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
             }
@@ -167,6 +176,40 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
         // ScrollView. A fixed, bounded viewport keeps the popover visible;
         // overflow remains reachable through vertical scrolling.
         .frame(width: 360, height: 560)
+    }
+}
+
+@available(macOS 14.2, *)
+private struct CapturePrimaryActionButton<Model: VolEqControlSurfaceModel>: View {
+    @ObservedObject var model: Model
+    let compact: Bool
+    let fillsWidth: Bool
+    let isDefaultAction: Bool
+
+    @ViewBuilder
+    var body: some View {
+        if isDefaultAction {
+            button.keyboardShortcut(.defaultAction)
+        } else {
+            button
+        }
+    }
+
+    private var button: some View {
+        let presentation = model.capturePresentation
+        return Button {
+            model.toggle()
+        } label: {
+            Text(compact
+                ? presentation.compactPrimaryActionTitle
+                : presentation.primaryActionTitle)
+                .frame(maxWidth: fillsWidth ? .infinity : nil)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(!presentation.canPerformPrimaryAction)
+        .accessibilityLabel(presentation.primaryActionTitle)
+        .accessibilityIdentifier("voleq.primary-action")
     }
 }
 
@@ -197,16 +240,18 @@ struct MenuBarStatusLabel<Model: VolEqControlSurfaceModel>: View {
     }
 
     private var accessibilityLabel: String {
+        let presentation = model.capturePresentation
         if let update = updates.knownAvailableUpdate {
-            return "VolEq, \(model.runtimeTitle), version \(update.version) available"
+            return "VolEq, \(presentation.runtimeTitle), version \(update.version) available"
         }
-        return "VolEq, \(model.runtimeTitle)"
+        return "VolEq, \(presentation.runtimeTitle)"
     }
 }
 
 @available(macOS 14.2, *)
 private struct UpdateAvailableIndicator: View {
     @ObservedObject var updates: UpdateController
+    let actions: ApplicationShellActions
     let compact: Bool
 
     var body: some View {
@@ -229,7 +274,7 @@ private struct UpdateAvailableIndicator: View {
                 Spacer(minLength: 8)
 
                 Button("View Release…") {
-                    _ = updates.openRelease(update)
+                    actions.viewRelease(update)
                 }
             }
             .padding(compact ? 10 : 12)
@@ -245,24 +290,25 @@ private struct RuntimeStatusView<Model: VolEqControlSurfaceModel>: View {
     let compact: Bool
 
     var body: some View {
+        let presentation = model.capturePresentation
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Circle()
-                .fill(model.statusColor)
+                .fill(presentation.statusTone.color)
                 .frame(width: compact ? 10 : 12, height: compact ? 10 : 12)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: compact ? 2 : 4) {
-                Text(model.runtimeTitle)
+                Text(presentation.runtimeTitle)
                     .font(compact ? .headline : .title2.weight(.semibold))
-                Text(model.targetSummary)
+                Text(presentation.targetSummary)
                     .font(compact ? .callout : .body)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
                 if !compact
-                    || (model.runtimeState != .ready
-                        && model.runtimeState != .active) {
-                    Text(model.status)
+                    || (model.captureState.runtimeState != .ready
+                        && model.captureState.runtimeState != .active) {
+                    Text(model.captureState.status)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -271,72 +317,46 @@ private struct RuntimeStatusView<Model: VolEqControlSurfaceModel>: View {
             }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(presentation.accessibilityText)
+        .accessibilityIdentifier("voleq.runtime-status")
     }
 }
 
 @available(macOS 14.2, *)
-private struct AudioAccessActions<Model: VolEqControlSurfaceModel>: View {
+private struct AudioSafetyActions<Model: VolEqControlSurfaceModel>: View {
     @ObservedObject var model: Model
-    @ObservedObject var systemAudioAccess: SystemAudioAccessPresentationController
-    let compact: Bool
+    let actions: ApplicationShellActions
 
     @ViewBuilder
     var body: some View {
-        switch model.systemAudioAccessState {
-        case .checking:
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Keep the selected audio playing. VolEq is not changing the original output while access is checked.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Cancel") {
-                    model.cancelAudioAccessCheck()
-                }
-                .buttonStyle(.bordered)
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(compact ? 10 : 12)
-            .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-        case let .actionRequired(issue):
+        let accessState = model.captureState.systemAudioAccessState
+        if case .actionRequired(.cleanupFailed) = accessState {
             VStack(alignment: .leading, spacing: 10) {
-                Text(issue == .cleanupFailed
-                    ? "VolEq could not fully stop Core Audio resources. Quit VolEq before trying again."
-                    : "System Audio Recording permission is required to process playback. Audio is processed in memory and is never saved or uploaded.")
+                Text("VolEq could not fully stop Core Audio resources. Quit VolEq before trying again.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if issue == .cleanupFailed {
-                    Button("Quit VolEq") {
-                        NSApp.terminate(nil)
-                    }
-                } else {
-                    HStack {
-                        Button("Open System Settings…") {
-                            systemAudioAccess.openSystemAudioRecordingSettings()
-                        }
-                        Button("Check Again") {
-                            model.checkAudioAccessAgain()
-                        }
-                        .disabled(model.isCheckingAudioAccess)
-                    }
-                    if let fallback = systemAudioAccess.settingsFallbackMessage {
-                        Text(fallback)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        Text("If macOS asks you to quit and reopen VolEq after changing access, do that before choosing Check Again.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                Button("Quit VolEq") {
+                    actions.quit()
                 }
+                .accessibilityIdentifier("voleq.cleanup-failure-quit")
             }
-            .padding(compact ? 10 : 12)
+            .padding(12)
             .background(.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-        case .notRequested, .explanationRequired, .verified:
-            EmptyView()
         }
+    }
+}
+
+private struct NoSoundButton: View {
+    @ObservedObject var systemAudioAccess: SystemAudioAccessPresentationController
+
+    var body: some View {
+        Button("No sound?") {
+            systemAudioAccess.presentNoSoundHelp()
+        }
+        .accessibilityIdentifier("voleq.no-sound-help")
+        .buttonStyle(.plain)
+        .help("Troubleshoot System Audio Recording permission")
     }
 }
 
@@ -346,6 +366,7 @@ private struct CaptureControls<Model: VolEqControlSurfaceModel>: View {
     let compact: Bool
 
     var body: some View {
+        let presentation = model.capturePresentation
         VStack(alignment: .leading, spacing: compact ? 12 : 16) {
             Text("Capture")
                 .font(compact ? .headline : .title3.weight(.semibold))
@@ -357,7 +378,7 @@ private struct CaptureControls<Model: VolEqControlSurfaceModel>: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .disabled(model.controlsLocked)
+            .disabled(presentation.controlsLocked)
 
             if model.mode == .application {
                 HStack(spacing: 8) {
@@ -369,7 +390,7 @@ private struct CaptureControls<Model: VolEqControlSurfaceModel>: View {
                             Text(process.label).tag(process.id as AudioObjectID?)
                         }
                     }
-                    .disabled(model.controlsLocked || model.processes.isEmpty)
+                    .disabled(presentation.controlsLocked || model.processes.isEmpty)
 
                     Button {
                         model.refreshProcesses()
@@ -377,7 +398,7 @@ private struct CaptureControls<Model: VolEqControlSurfaceModel>: View {
                         Image(systemName: "arrow.clockwise")
                     }
                     .help("Refresh audio applications")
-                    .disabled(model.controlsLocked)
+                    .disabled(presentation.controlsLocked)
                 }
             } else if !compact {
                 Text("Includes the current output mix from every application except VolEq.")
@@ -400,9 +421,10 @@ private struct CaptureControls<Model: VolEqControlSurfaceModel>: View {
                 Spacer()
                 Toggle("Speech-aware leveling", isOn: $model.speechAwarenessEnabled)
                     .labelsHidden()
-                    .disabled(model.controlsLocked)
+                    .disabled(presentation.controlsLocked)
             }
         }
+        .accessibilityIdentifier("voleq.capture-controls")
     }
 }
 

@@ -7,8 +7,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <CoreAudio/CoreAudioTypes.h>
-
 typedef struct VolEqRealtimeContentState VolEqRealtimeContentState;
 
 VolEqRealtimeContentState *voleq_realtime_content_state_create(size_t capacity);
@@ -35,22 +33,17 @@ bool voleq_realtime_content_state_is_speech_authorized(
     const VolEqRealtimeContentState *state
 );
 
-typedef struct VolEqRealtimeSignalLatch VolEqRealtimeSignalLatch;
+typedef struct VolEqRealtimeHeartbeat VolEqRealtimeHeartbeat;
 
-VolEqRealtimeSignalLatch *voleq_realtime_signal_latch_create(void);
-void voleq_realtime_signal_latch_destroy(VolEqRealtimeSignalLatch *latch);
+VolEqRealtimeHeartbeat *voleq_realtime_heartbeat_create(void);
+void voleq_realtime_heartbeat_destroy(VolEqRealtimeHeartbeat *heartbeat);
 
-void voleq_realtime_signal_latch_observe_callback(
-    VolEqRealtimeSignalLatch *latch,
-    const AudioBufferList *input_data
+void voleq_realtime_heartbeat_record_callback(
+    VolEqRealtimeHeartbeat *heartbeat
 );
 
-uint32_t voleq_realtime_signal_latch_qualifying_callback_count(
-    const VolEqRealtimeSignalLatch *latch
-);
-
-bool voleq_realtime_signal_latch_is_malformed(
-    const VolEqRealtimeSignalLatch *latch
+uint64_t voleq_realtime_heartbeat_callback_count(
+    const VolEqRealtimeHeartbeat *heartbeat
 );
 
 #endif

@@ -85,34 +85,193 @@ changing public APIs, source tags, converted FIFO bounds, or failure behavior.
 
 The macOS adapter. It owns Core Audio process discovery, process taps, aggregate-device lifecycle, audio-buffer adaptation, and output-device interaction. Apple-specific identifiers stay here.
 
-`AudioCaptureController` remains the main-actor lifecycle owner. Process
-discovery is isolated behind its existing injectable `loadProcessesOverride`
-seam for direct tests, while published state, Core Audio resources, teardown
-ordering, route recovery, and diagnostics scheduling remain together so no
-controller-facing lifecycle transition can bypass cleanup.
+`AudioCaptureController` is a stable `ObservableObject` façade. It publishes the
+app-facing selection and settings plus one atomic `AudioCaptureStateSnapshot`.
+The existing runtime, running, access, and status names remain read-only
+compatibility publishers mirrored from that snapshot; app surfaces consume only
+the atomic snapshot, while downstream clients retain their original projected
+publishers and exhaustive runtime-state source compatibility. Phase-derived
+primary-action readiness is included in the same publication, so an asynchronous stopping
+phase cannot render an enabled Start action that lifecycle ownership must reject.
+It forwards commands but
+owns no Core Audio handles, route listeners,
+clocks, watchdogs, or asynchronous lifecycle work.
 
-System Audio Recording startup is a two-phase gate. First, the controller
-validates the selected process or device-wide exclusion, output device and
-format, and optional speech model without creating a tap. The application shell
-then supplies the persisted first-use explanation decision. After Continue, an
-injectable permission-probe factory creates a private, unmuted, input-only tap
-and aggregate for the same target. A preallocated C11-atomic latch requires two
-callbacks with finite samples above `1e-7`; silence can only time out as
-unverified because the public SDK has no dedicated authorization-status API.
-The probe never has an output path and is fully stopped and destroyed before
-the controller may create `.mutedWhenTapped` processing resources.
+`AudioCaptureLifecycleCoordinator` is the main-actor policy boundary. One
+`CaptureLifecyclePhase` distinguishes stopped, explanation-declined, ready,
+explaining, preparing, active, stopping, suspending/suspended, recovering,
+recovery-failed, route-monitoring-failed, ordinary-failed, and cleanup-failed
+states. Process-discovery and pipeline failures are distinct phases, so Refresh
+cannot erase an unrelated failure. The app's
+authoritative `captureState` is published atomically from one lifecycle
+snapshot; `isRunning`, runtime state, and access state are derived from the
+phase, while status is the phase's presentation detail. The legacy projected
+publishers (`$isRunning`, `$runtimeState`, `$systemAudioAccessState`, and
+`$status`) remain source-compatible sequential mirrors of that snapshot; app
+surfaces and accessibility do not consume them as a transaction.
+One serialized transition task and a generation token ensure that sleep, wake,
+output-route, callback-stall, Stop/Cancel/Quit, and retry events cannot create
+competing graphs or accept stale results.
+Live leveling settings remain phase-owned configuration rather than operation
+identity. Asynchronous results match the stable mode, speech path, and capture
+target, then carry the latest phase settings forward; a pipeline finishing
+construction receives those current settings before callback Start.
 
-Every fresh start and route-recovery rebuild repeats the probe. Published
-`SystemAudioAccessState` distinguishes explanation, checking, verified, and
-action-required states. `isRunning` remains false through preflight and probing,
-and becomes true only after the verified real pipeline starts successfully.
-Denial, uncertainty, timeout, cancellation, malformed samples, route changes,
-and ordinary Core Audio startup failures tear down the probe and leave the
-original output unchanged when cleanup succeeds. If Core Audio refuses a stop
-or destroy operation, VolEq retains resource ownership, blocks another
-pipeline, requires Quit, and does not claim restoration. Tests inject
-explanation, probe, time, factory, and teardown seams; production code uses only
-public Core Audio APIs.
+`CaptureLifecycleStateMachine` is the sole phase-and-snapshot mutator. It
+applies the pure `CaptureLifecycleReducer` before dispatching commands and
+before accepting explanation, pipeline, teardown, recovery-failure, or
+termination results. Accepted asynchronous events return their next phase and
+effect; stale or phase-incompatible completions publish nothing. Direct
+state-machine tests cover valid completion paths and illegal stale events.
+`AudioCaptureProcessSession` owns the current process
+list, selected identity, and explicit-reselection requirement.
+`AudioProcessRefreshCoordinator` owns refresh cancellation and coalescing: one
+enumeration may be in flight and only the newest pending request survives. It
+cannot publish selection or lifecycle results after either its request or the
+owning lifecycle generation becomes stale.
+The lifecycle coordinator owns the one first-use explanation decision and
+fresh PID-plus-bundle resolution after that explanation. `AudioCaptureRuntime` owns the active pipeline
+interface, initial callback gate, watchdog, diagnostics monitor, and retained
+pipeline executors. Graph construction and teardown serialize on the lifecycle
+executor, while callback Start runs separately so Stop, sleep, or termination
+can take ownership even if Core Audio blocks Start. The runtime adopts the
+constructed pipeline before Start and retains both in-flight work and the
+resulting pipeline until its typed teardown report returns.
+`CoreAudioCapturePreflight`
+runs on a separate serial executor, so route and format queries cannot block
+Stop, sleep, termination, or UI delivery. Failure-to-phase/status mapping is a separate pure presentation
+boundary. These components leave the coordinator responsible for serialized
+lifecycle policy rather than resource implementation or copy construction.
+
+`AudioCaptureDependencies` composes typed process-catalog, preflight, pipeline,
+route-monitor, route-stability, callback-health, clock, and scheduling
+contracts. `.live` is the only production composition;
+tests provide small fakes for the boundary they exercise. The façade contains
+no debug hooks, simulated resources, controller-capturing closures, or test
+recorders.
+
+The active muting and processing graph is owned only by
+`CoreAudioCapturePipeline`. It stages active-output listeners, the
+`.mutedWhenTapped` process tap, private aggregate, I/O proc, processor, and
+callback heartbeat. `start()` only starts the prepared callback. Idempotent
+`stop()` attempts listener removal independently, then I/O stop and destruction,
+aggregate destruction, and tap destruction in dependency order, returning an
+`AudioCaptureTeardownReport` for every unresolved step. Failed ancillary
+listener removal cannot skip muting-graph teardown. A failed I/O-proc destroy
+retains its device, aggregate, and tap and blocks downstream destruction until
+a retry succeeds; an aggregate failure similarly retains the tap. Unresolved
+ownership blocks replacement. Deinitialization schedules the same best-effort
+path off the main actor and deliberately retains unresolved callback ownership.
+The I/O callback owner explicitly distinguishes prepared, Start-pending,
+running, and stopped states. Teardown may issue a preemptive Stop to unblock a
+pending Start, but records stopped only after the Start result and an
+authoritative post-completion Stop; a Start that outlives the bounded shutdown
+wait automatically finishes the requested teardown before releasing ownership.
+Core Audio property helpers cap array allocations at one MiB and treat the
+second property read's returned byte count as authoritative. Shrinking process
+lists are read only through the returned elements; oversized first reads,
+growth, and partial-element sizes fail safely instead of exposing uninitialized
+storage. One canonical capture-format validator rejects non-finite or unsupported
+sample rates, non-native or unpacked Float32 PCM, and inconsistent packet/frame
+strides at the preflight, route-observation, and pipeline boundaries.
+
+`CoreAudioProcessCatalog` owns enumeration, while `CoreAudioCapturePreflight`
+owns route-format validation and preparation of an already-resolved target.
+Catalog property reads and route observations run on dedicated serial executors,
+then publish their typed results on the main actor. Refresh requests retain at
+most one in-flight enumeration and one latest pending request; cancelled queued
+reads check their lease before touching HAL so refresh storms cannot starve the
+fresh identity resolution required by Start or recovery.
+`ApplicationCaptureTargetResolver` owns restoration identity rules.
+`AudioOutputRouteMonitor` owns default-output notifications, while
+`AudioOutputRouteStabilityGate` owns the bounded settling algorithm and compares
+notifications with the latest prepared or active route observation to absorb
+unchanged duplicates during explanation, preparation, and
+after recovery. Listener installation and removal run on the monitor's retained
+serial executor. Notification comparison retains one in-flight observation and
+one pending recheck, and every stability observation is raced against the
+remaining absolute deadline, so a slow or hung HAL read cannot extend the
+ten-second recovery window.
+`AudioCallbackHealthMonitor` owns initial callback progress and the single
+stall notification. These boundaries keep lifecycle policy independent of raw
+Core Audio construction and timing machinery.
+
+Default-output monitoring is a startup prerequisite. An internal installing
+phase keeps commands non-ready while the serial executor registers the listener.
+A registration failure has its own non-startable lifecycle phase; Start may
+retry installation, but no graph is created until monitoring is
+confirmed. Listener removal
+returns a typed report and retains a failed registration so it can be retried
+without installing a competing callback.
+
+`prepareForSystemSleep()` snapshots capture mode, processing settings, speech
+awareness, and the selected application's Core Audio object, PID, bundle ID,
+and display name whenever startup, recovery, or active leveling reflects user
+intent. It cancels startup, route, diagnostics, and watchdog work,
+then removes active-output listeners and stops/destroys the I/O proc, aggregate,
+tap, and processors in the established order. `isRunning` becomes false
+immediately in a suspending phase while ownership remains retained until
+asynchronous cleanup finishes. Wake during that interval is coalesced and
+recovery begins only after cleanup completes; another sleep before completion
+cancels that queued wake. A
+failed stop or destroy retains the unresolved identifiers, blocks replacement,
+and reports a Quit-required failure without claiming restoration. A stopped
+session records no wake intent.
+
+`resumeAfterSystemWake()` coalesces duplicate wake and application-activation
+delivery. It waits one second, then requires two identical valid default-output
+observations 250 ms apart within a 10-second window. After the route stabilizes,
+it refreshes the format and process list. Application capture first matches PID
+plus bundle ID, then permits one unique exact bundle-ID match for a relaunched
+process. The same PID-plus-bundle resolution runs before every ordinary
+application preflight, and the production pipeline validates the resolved
+identity again immediately before tap construction. Bundleless, missing,
+ambiguous, reused, or unexpectedly moved targets fail safely. Missing or
+ambiguous targets require explicit selection; the first or an unrelated process
+is never substituted. Device-wide capture resolves the current route and VolEq
+exclusion afresh.
+
+System Audio Recording startup is intentionally direct. The application shell
+first presents the persisted privacy explanation. After Continue, the
+coordinator freshly resolves the target, runs non-mutating route/format/model
+preflight, and constructs the real processing pipeline. That Core Audio request
+is what causes macOS to present its System Audio Recording prompt. The public
+SDK has no dedicated authorization-status API, so VolEq does not attempt to
+infer permission from signal level, silence, or callback timing. There is no
+temporary permission tap, signal threshold, access-check timer, or automatic
+permission retry.
+
+Contributor runs use a distinct development bundle identifier and display name.
+This keeps an installed Developer-ID release and an ad-hoc source build from
+sharing an ambiguous System Settings row. Because an ad-hoc designated
+requirement is tied to one exact binary, a rebuilt development app may require a
+fresh grant; relaunching the already built app preserves that binary identity.
+
+`isRunning` remains false through explanation, preflight, construction, and
+callback startup, and becomes true only after the real pipeline starts and
+callback progress is observed. Ordinary Core Audio startup failures begin
+complete graph teardown. If Core Audio refuses a stop or destroy operation,
+VolEq retains resource ownership, blocks another pipeline, requires Quit, and
+does not claim restoration. Production code uses only public Core Audio APIs;
+focused tests drive typed protocols and resource owners directly rather than
+reaching through the façade.
+
+Wake, output-route, and callback-stall recovery use that same safe-start method;
+there is no independent muting rebuild path. Recovery stays non-Active through
+route readiness, process restoration, preflight, and pipeline construction. The
+replacement graph is reported Active only after `AudioDeviceStart` and observed
+callback progress. Stop, Cancel, Quit, or a newer generation clears resume intent
+so a late readiness or pipeline result cannot reactivate audio.
+
+Each processing graph owns a preallocated `AudioCallbackHeartbeat` backed by a
+lock-free C11-atomic 64-bit counter. The real-time I/O callback performs one
+relaxed atomic increment before processing and does no clock conversion, task
+creation, allocation, locking, logging, or UI work. The main-actor watchdog
+samples the counter every 250 ms only while the graph is Active. Any progress,
+including callbacks containing silence, is healthy; two seconds without
+progress immediately leaves Active, tears down the muting graph, and schedules
+one bounded recovery attempt. Watchdog accounting is disarmed during deliberate
+teardown, suspension, and route recovery.
 
 Within the callback pipeline, `AudioIOProcessor` owns the prepared direct and
 converted DSP paths and selects exactly one after `AudioCallbackCadenceAnalyzer`
@@ -130,16 +289,32 @@ The open-source macOS application shell. It owns the Community interface,
 permission-facing copy, and edition-specific product presentation. A shared
 `VolEqControlSurfaceModel` contract supplies the utility window and menu-bar
 popover with the same capture targets, settings, runtime state, status, and
-commands. `AppDelegate` owns native window controllers, Dock activation policy,
+commands. `CapturePresentation` is the single value mapping lifecycle state to
+title, full and compact actions, status tone, control locking, target summary,
+and accessibility text. Both surfaces consume that value; presentation tests
+drive a controllable model rather than searching Swift source text.
+`AppDelegate` owns native window controllers, Dock activation policy,
 Settings presentation, and explicit termination behavior. Changing between
 Window and Menu Bar presentation changes only application-shell state; it does
 not rebuild or mutate the active audio path.
 
 `SystemAudioAccessPresentationController` owns explanation acceptance
 persistence and injectable System Settings navigation. `AppDelegate` presents
-the native Continue / Not Now explanation. Both control surfaces render the
-same checking, Cancel, Open System Settings, Check Again, fallback-path, and
-relaunch guidance without coupling those shell concerns to Core Audio.
+the native Continue / Not Now explanation. Both control surfaces always render
+the same **No sound?** action. Its native help reiterates that audio is processed
+only in memory and is never recorded, saved, uploaded, or sent as telemetry,
+then offers direct navigation to System Audio Recording settings without
+coupling that shell concern to Core Audio.
+
+An injectable `WorkspaceLifecycleForwarder` sends
+`NSWorkspace.willSleepNotification` and `didWakeNotification` to the audio
+controller. Wake delivery to the update controller uses a separate subscription
+so audio recovery cannot suppress update scheduling. Application activation is
+also forwarded; the audio controller ignores it unless a suspended session has
+pending resume intent. Both native surfaces therefore derive Paused for System
+Sleep, Restoring Leveling, Leveling Did Not Resume, Stop, and Try Again from the
+same presentation mapping and announce recovery state changes through macOS
+accessibility.
 
 The application shell also owns first-party branding integration. The build
 copies a generated `.icns` and a 256-by-256-pixel template raster for the macOS
@@ -211,9 +386,11 @@ The macOS shell maintains these presentation invariants:
 ## Real-time audio rules
 
 - Do not allocate memory, wait on a contended lock, log, or call UI code in the audio callback.
-- The permission-probe callback only traverses the supplied float buffers and
-  updates its preallocated C11-atomic malformed latch and qualifying-callback
-  counter. It does not allocate, lock, log, replay samples, or call UI code.
+- The processing callback increments only its preallocated lock-free C11-atomic
+  heartbeat before feeding prepared processors. Time measurement, stall
+  decisions, recovery tasks, status, and accessibility stay on the control
+  thread; potentially blocking HAL teardown runs on the retained serial cleanup
+  executor.
 - UI settings are published as snapshots. The callback uses its previous snapshot if an update lock is busy.
 - The leveler allocates its linked-stereo lookahead storage during construction. Its default 20 ms delay lets the detector lower gain before a loud onset is emitted; the delay, detector, and gain history start empty whenever the audio route is rebuilt. The first lookahead period is therefore silence by design. A future peak may lower the gain envelope immediately but may never raise it, and its maximum-gain cap travels with the delayed frame so release smoothing cannot outrun an isolated transient. The delayed frame still passes through the final safety limiter.
 - RNNoise model loading and checksum verification finish before the process tap
@@ -291,7 +468,9 @@ The macOS shell maintains these presentation invariants:
   corrupt wet samples, impossible source mappings, FIFO overflow, or resampler
   failure latches the processor in a silent failed state and publishes
   one preallocated failure signal without blocking. A control-thread monitor then
-  tears down the replacement path so Core Audio restores the original audio.
+  attempts complete replacement-path teardown. Original audio is considered
+  restored only after that teardown completes; unresolved Core Audio ownership
+  remains retained, blocks restart, and requires Quit.
 - The processor measures the aggregate callback's input/output frame cadence against Core Audio host timestamps, not only the tap's advertised rates or a single pair of buffer sizes. A shared effective clock indicates that tap drift compensation already synchronized the Bluetooth route and duplicate conversion must be bypassed; distinct input/output clocks use Audio Converter Services with preallocated input and output FIFOs. The output FIFO pre-rolls briefly and writes only complete device periods. A full FIFO drops its oldest frame to recover at the live edge instead of accumulating latency, while missing or inconclusive timing fails safely and sustained output underruns never emit repeated partial periods.
 - Always tear down the I/O callback before destroying its aggregate device or process tap.
 - Default-output, device-alive, sample-rate, and stream-format listeners rebuild the complete audio path after route or Bluetooth profile changes.

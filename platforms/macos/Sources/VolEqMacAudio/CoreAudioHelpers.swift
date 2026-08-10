@@ -3,6 +3,8 @@
 import CoreAudio
 import Foundation
 
+let maximumCoreAudioPropertyArrayByteCount: UInt32 = 1_048_576
+
 enum VolEqError: LocalizedError {
     case coreAudio(operation: String, status: OSStatus)
     case missingValue(String)
@@ -62,6 +64,11 @@ func readValue<T>(
         AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, value),
         "Read Core Audio property \(selector)"
     )
+    guard size == UInt32(MemoryLayout<T>.size) else {
+        throw VolEqError.missingValue(
+            "Core Audio returned an invalid size for property \(selector)."
+        )
+    }
     return value.pointee
 }
 
@@ -78,15 +85,41 @@ func readArray<T>(
         "Size Core Audio property \(selector)"
     )
 
-    let count = Int(size) / MemoryLayout<T>.stride
-    guard count > 0 else { return [] }
-    let values = UnsafeMutablePointer<T>.allocate(capacity: count)
+    let allocatedCount = try validatedCoreAudioArrayCount(
+        byteCount: size,
+        elementStride: MemoryLayout<T>.stride,
+        maximumByteCount: maximumCoreAudioPropertyArrayByteCount
+    )
+    guard allocatedCount > 0 else { return [] }
+    let allocatedByteCount = size
+    let values = UnsafeMutablePointer<T>.allocate(capacity: allocatedCount)
     defer { values.deallocate() }
     try requireNoErr(
         AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, values),
         "Read Core Audio property array \(selector)"
     )
-    return Array(UnsafeBufferPointer(start: values, count: count))
+    let returnedCount = try validatedCoreAudioArrayCount(
+        byteCount: size,
+        elementStride: MemoryLayout<T>.stride,
+        maximumByteCount: allocatedByteCount
+    )
+    return Array(UnsafeBufferPointer(start: values, count: returnedCount))
+}
+
+func validatedCoreAudioArrayCount(
+    byteCount: UInt32,
+    elementStride: Int,
+    maximumByteCount: UInt32
+) throws -> Int {
+    guard elementStride > 0,
+          byteCount <= maximumByteCount,
+          Int(byteCount).isMultiple(of: elementStride)
+    else {
+        throw VolEqError.missingValue(
+            "Core Audio returned an invalid property-array size."
+        )
+    }
+    return Int(byteCount) / elementStride
 }
 
 func readString(
@@ -101,6 +134,11 @@ func readString(
         AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, bytes.baseAddress!)
     }
     try requireNoErr(status, "Read Core Audio string property \(selector)")
+    guard size == UInt32(MemoryLayout<Unmanaged<CFString>?>.size) else {
+        throw VolEqError.missingValue(
+            "Core Audio returned an invalid string-property size."
+        )
+    }
     guard let value else { throw VolEqError.missingValue("Core Audio returned an empty string property.") }
     return value.takeRetainedValue() as String
 }
@@ -133,24 +171,50 @@ func processObject(for pid: pid_t) throws -> AudioObjectID? {
         ),
         "Find this app's Core Audio process"
     )
+    guard size == UInt32(MemoryLayout<AudioObjectID>.size) else {
+        throw VolEqError.missingValue(
+            "Core Audio returned an invalid process-object size."
+        )
+    }
     return objectID == kAudioObjectUnknown ? nil : objectID
 }
 
-func validateFloat32(_ format: AudioStreamBasicDescription, label: String) throws {
-    let isPCM = format.mFormatID == kAudioFormatLinearPCM
-    let isFloat = (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-    guard isPCM, isFloat, format.mBitsPerChannel == 32 else {
-        throw VolEqError.unsupportedFormat(
-            "\(label) uses an unsupported audio format. VolEq currently expects 32-bit floating-point PCM."
-        )
+func validateApplicationCaptureIdentity(
+    objectID: AudioObjectID,
+    expected: ApplicationCaptureIdentity
+) throws {
+    let actualPID: pid_t = try readValue(
+        objectID: objectID,
+        selector: kAudioProcessPropertyPID
+    )
+    let actualBundleID = try readString(
+        objectID: objectID,
+        selector: kAudioProcessPropertyBundleID
+    )
+    guard actualPID == expected.pid,
+          !expected.bundleID.isEmpty,
+          actualBundleID == expected.bundleID
+    else {
+        throw RecoveryFailure.applicationMissing(expected.displayName)
     }
 }
 
-func validateSupportedChannelLayout(
+func validateCaptureAudioFormat(
     _ format: AudioStreamBasicDescription,
     label: String
 ) throws {
-    let channelCount = Int(format.mChannelsPerFrame)
+    let isPCM = format.mFormatID == kAudioFormatLinearPCM
+    let isFloat = (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+    let isPacked = (format.mFormatFlags & kAudioFormatFlagIsPacked) != 0
+    let isNativeEndian = (format.mFormatFlags & kAudioFormatFlagIsBigEndian) == 0
+    let isNonInterleaved =
+        (format.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+    let allowedFlags = kAudioFormatFlagIsFloat
+        | kAudioFormatFlagIsPacked
+        | kAudioFormatFlagIsNonInterleaved
+    let hasOnlySupportedFlags = (format.mFormatFlags & ~allowedFlags) == 0
+    let channels = format.mChannelsPerFrame
+    let channelCount = Int(channels)
     guard (1...2).contains(channelCount) else {
         let description = channelCount == 1 ? "channel" : "channels"
         throw VolEqError.unsupportedFormat(
@@ -159,4 +223,30 @@ func validateSupportedChannelLayout(
                 + "so processing was not started."
         )
     }
+    let expectedBytesPerFrame = isNonInterleaved
+        ? UInt32(MemoryLayout<Float>.size)
+        : channels * UInt32(MemoryLayout<Float>.size)
+    let expectedPacketBytes = expectedBytesPerFrame.multipliedReportingOverflow(
+        by: format.mFramesPerPacket
+    )
+
+    guard format.mSampleRate.isFinite,
+          (8_000...192_000).contains(format.mSampleRate),
+          isPCM,
+          isFloat,
+          isPacked,
+          isNativeEndian,
+          hasOnlySupportedFlags,
+          format.mBitsPerChannel == 32,
+          format.mFramesPerPacket == 1,
+          format.mReserved == 0,
+          !expectedPacketBytes.overflow,
+          format.mBytesPerFrame == expectedBytesPerFrame,
+          format.mBytesPerPacket == expectedPacketBytes.partialValue
+    else {
+        throw VolEqError.unsupportedFormat(
+            "\(label) uses an unsupported audio format. VolEq currently expects native packed 32-bit floating-point PCM between 8 and 192 kHz with no contradictory layout flags."
+        )
+    }
+
 }

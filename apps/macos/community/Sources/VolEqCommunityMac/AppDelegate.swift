@@ -22,27 +22,61 @@ enum MacActivationPolicyTransition {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var presentationSubscription: AnyCancellable?
     private var audioAccessExplanationSubscription: AnyCancellable?
+    private var noSoundHelpSubscription: AnyCancellable?
     private var audioRuntimeAnnouncementSubscription: AnyCancellable?
     private var consentSubscription: AnyCancellable?
     private var manualUpdateSubscription: AnyCancellable?
     private var releaseOpenFailureSubscription: AnyCancellable?
-    private var wakeSubscription: AnyCancellable?
+    private let workspaceLifecycle: WorkspaceLifecycleForwarder
+    private let terminationReply: @MainActor (NSApplication, Bool) -> Void
+    private let audioStatusAnnouncement: @MainActor (String) -> Void
+    private var audioAnnouncementTracker = AudioStatusAnnouncementTracker()
     private var utilityWindowController: NSWindowController?
     private var settingsWindowController: NSWindowController?
     private var isRestoringPresentation = false
     private var didFinishLaunching = false
     private var isPresentingConsent = false
     private var isPresentingAudioAccessExplanation = false
+    private var isPresentingNoSoundHelp = false
     private var isPresentingUpdateResult = false
+    private var isAwaitingAudioTermination = false
+    private var didCompleteAudioTermination = false
 
     private let applicationModel: VolEqApplicationModel
 
     override convenience init() {
-        self.init(applicationModel: .shared)
+        self.init(
+            applicationModel: .shared,
+            workspaceNotificationCenter: NSWorkspace.shared.notificationCenter,
+            audioStatusAnnouncement: Self.postAudioStatusAnnouncement,
+            terminationReply: { $0.reply(toApplicationShouldTerminate: $1) }
+        )
     }
 
-    init(applicationModel: VolEqApplicationModel) {
+    init(
+        applicationModel: VolEqApplicationModel,
+        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        audioStatusAnnouncement: @escaping @MainActor (String) -> Void =
+            AppDelegate.postAudioStatusAnnouncement,
+        terminationReply: @escaping @MainActor (NSApplication, Bool) -> Void = {
+            $0.reply(toApplicationShouldTerminate: $1)
+        }
+    ) {
         self.applicationModel = applicationModel
+        self.audioStatusAnnouncement = audioStatusAnnouncement
+        self.terminationReply = terminationReply
+        workspaceLifecycle = WorkspaceLifecycleForwarder(
+            notificationCenter: workspaceNotificationCenter,
+            prepareAudioForSleep: {
+                applicationModel.audio.prepareForSystemSleep()
+            },
+            resumeAudioAfterWake: {
+                applicationModel.audio.resumeAfterSystemWake()
+            },
+            updateApplicationActivatedOrWoke: {
+                applicationModel.updates.applicationActivatedOrWoke()
+            }
+        )
         super.init()
     }
 
@@ -61,30 +95,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.presentSystemAudioAccessExplanation()
             }
 
-        audioRuntimeAnnouncementSubscription = applicationModel.audio
-            .$runtimeState
+        noSoundHelpSubscription = applicationModel.systemAudioAccess
+            .$shouldPresentNoSoundHelp
             .removeDuplicates()
-            .filter { state in
-                state == .checkingAccess
-                    || state == .permissionRequired
-                    || state == .failed
+            .filter { $0 }
+            .sink { [weak self] _ in
+                self?.presentNoSoundHelp()
             }
-            .sink { [weak self] state in
-                Task { @MainActor [weak self] in
-                    await Task.yield()
-                    guard let self,
-                          self.applicationModel.audio.runtimeState == state
-                    else { return }
-                    NSAccessibility.post(
-                        element: NSApplication.shared,
-                        notification: .announcementRequested,
-                        userInfo: [
-                            .announcement: self.applicationModel.audio.status,
-                            .priority: NSAccessibilityPriorityLevel.high.rawValue
-                        ]
-                    )
-                }
-            }
+
+        startAudioRuntimeAnnouncements()
 
         consentSubscription = applicationModel.updates.$shouldPresentConsent
             .removeDuplicates()
@@ -105,12 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.presentReleaseOpenFailure(presentation)
             }
 
-        wakeSubscription = NSWorkspace.shared.notificationCenter.publisher(
-            for: NSWorkspace.didWakeNotification
-        )
-        .sink { [weak self] _ in
-            self?.applicationModel.updates.applicationActivatedOrWoke()
-        }
+        workspaceLifecycle.start()
 
         didFinishLaunching = true
         Task { @MainActor [weak self] in
@@ -119,9 +133,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func startAudioRuntimeAnnouncements() {
+        guard audioRuntimeAnnouncementSubscription == nil else { return }
+        audioRuntimeAnnouncementSubscription = applicationModel.audio
+            .$captureState
+            .removeDuplicates()
+            .sink { [weak self] state in
+                self?.processAudioStateForAnnouncement(state)
+            }
+    }
+
+    func processAudioStateForAnnouncement(_ state: AudioCaptureStateSnapshot) {
+        guard let message = audioAnnouncementTracker.message(for: state) else {
+            return
+        }
+        audioStatusAnnouncement(message)
+    }
+
+    private static func postAudioStatusAnnouncement(_ status: String) {
+        let userInfo: [NSAccessibility.NotificationUserInfoKey: Any] = [
+            .announcement: status,
+            .priority: NSAccessibilityPriorityLevel.high.rawValue
+        ]
+        NSAccessibility.post(
+            element: NSApplication.shared,
+            notification: .announcementRequested,
+            userInfo: userInfo
+        )
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         guard didFinishLaunching else { return }
-        applicationModel.updates.applicationActivatedOrWoke()
+        workspaceLifecycle.applicationActivated()
     }
 
     func applicationShouldHandleReopen(
@@ -137,9 +180,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard !isAwaitingAudioTermination else { return .terminateLater }
+        isAwaitingAudioTermination = true
+        Task { @MainActor [weak self, weak sender] in
+            guard let self else { return }
+            await applicationModel.audio.prepareForApplicationTermination()
+            didCompleteAudioTermination = true
+            isAwaitingAudioTermination = false
+            if let sender { terminationReply(sender, true) }
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         applicationModel.updates.applicationWillTerminate()
-        applicationModel.audio.stop()
+        if !didCompleteAudioTermination {
+            applicationModel.audio.stop()
+        }
     }
 
     func showSettings() {
@@ -239,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model: applicationModel.audio,
             systemAudioAccess: applicationModel.systemAudioAccess,
             updates: applicationModel.updates,
-            openSettings: { [weak self] in self?.showSettings() }
+            actions: makeShellActions()
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)
@@ -256,7 +316,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeSettingsWindowController() -> NSWindowController {
         let rootView = PresentationSettingsView(
             presentation: applicationModel.presentation,
-            updates: applicationModel.updates
+            updates: applicationModel.updates,
+            actions: makeShellActions()
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)
@@ -268,6 +329,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.tabbingMode = .disallowed
         window.center()
         return NSWindowController(window: window)
+    }
+
+    private func makeShellActions() -> ApplicationShellActions {
+        ApplicationShellActions(
+            updates: applicationModel.updates,
+            openSettings: { [weak self] in self?.showSettings() },
+            quit: { NSApp.terminate(nil) }
+        )
     }
 
     private func presentAutomaticCheckConsent() {
@@ -307,6 +376,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applicationModel.systemAudioAccess.respondToExplanation(
                 continued: response == .alertFirstButtonReturn
             )
+        }
+    }
+
+    private func presentNoSoundHelp() {
+        guard !isPresentingNoSoundHelp else { return }
+        isPresentingNoSoundHelp = true
+
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = SystemAudioAccessPresentationController.noSoundTitle
+        alert.informativeText = SystemAudioAccessPresentationController.noSoundCopy
+        alert.addButton(withTitle: "Open System Settings…")
+        let doneButton = alert.addButton(withTitle: "Done")
+        doneButton.keyEquivalent = "\u{1b}"
+        present(alert) { [weak self] response in
+            guard let self else { return }
+            self.isPresentingNoSoundHelp = false
+            self.applicationModel.systemAudioAccess.dismissNoSoundHelp()
+            if response == .alertFirstButtonReturn {
+                self.applicationModel.systemAudioAccess
+                    .openSystemAudioRecordingSettings()
+            }
         }
     }
 

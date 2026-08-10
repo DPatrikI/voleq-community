@@ -17,27 +17,45 @@ unchanged until the separate release branch.
   hours while VolEq is running.
 - Accessible in-app indicators for a newer release without automatic download,
   installation, notifications, or interruption of active leveling.
-- A two-phase System Audio Recording gate that verifies real captured samples
-  through a temporary unmuted probe before any muting processing path can be
-  created or started.
-- Native first-use explanation, cancellable access checking, and equivalent
-  System Settings / Check Again recovery in the utility window and menu-bar
-  popover.
+- A native first-use privacy explanation before the real pipeline asks macOS
+  for System Audio Recording access.
+- An always-visible **No sound?** help action in both control surfaces, with
+  local-only privacy guidance and a direct System Settings action.
+- Separate contributor-build identity, so an installed release grant is never
+  mistaken for access to a newly ad-hoc-signed source build.
+- Proactive system-sleep teardown and bounded wake reconstruction that preserve
+  the intended capture mode, processing settings, and application identity.
+- A lock-free C11-atomic callback heartbeat with a control-thread watchdog that
+  attempts complete teardown before reusing the safe recovery path when
+  callbacks stop progressing. If Core Audio refuses cleanup, VolEq retains
+  ownership and requires Quit rather than claiming restoration.
+- Equivalent accessible Paused for System Sleep, Restoring Leveling, and
+  Leveling Did Not Resume states with a user-controlled Try Again action in the
+  utility window and menu-bar popover.
 
 ### Fixed
 
-- Denied, silent, timed-out, cancelled, malformed, and ordinary Core Audio
-  startup failures now remain stopped with the original audio unchanged when
-  cleanup completes, instead of allowing a muting tap to silence playback while
-  VolEq appeared active.
-- Fresh starts and output-route recovery now reverify access, require complete
-  probe teardown before rebuilding, and fail closed if Core Audio refuses it.
-- If Core Audio refuses to stop or destroy a probe or processing resource,
+- Core Audio startup failures now leave the lifecycle non-running and attempt
+  complete cleanup instead of reporting a failed graph as active.
+- Removed signal-based permission inference, temporary permission probes,
+  30-second access checks, retry timers, and Checking Audio Access recovery UI.
+  The real pipeline now follows the explanation directly and macOS remains the
+  authority for permission state.
+- If Core Audio refuses to stop or destroy a processing resource,
   VolEq retains ownership, requires Quit, and does not claim that the original
   audio path was restored.
 - Window presentation now treats an already-correct AppKit activation policy as
   success, and switching from the menu bar dismisses the popover before removing
   its status item.
+- Full system sleep now immediately leaves Active and begins dependent muting-
+  graph teardown; wake is coalesced until cleanup finishes, then waits for a
+  stable output route before creating a replacement graph.
+- VolEq no longer reports Active until callback progress has begun, and a graph
+  with no callback progress for two seconds is torn down instead of retaining a
+  stale muting path.
+- Application capture after wake is restored only by PID plus bundle identity,
+  or by one unique exact bundle match; missing or ambiguous targets stop safely
+  instead of selecting an unrelated process.
 
 ### Privacy
 
@@ -69,10 +87,14 @@ unchanged until the separate release branch.
 ### Known limitations
 
 - The official v0.1.0 application supports Apple Silicon only.
-- v0.1.0 could create its muting capture path before System Audio Recording
-  access was verified. Permission denial could therefore silence original
-  playback while VolEq incorrectly appeared active; this is the safety defect
-  corrected under Unreleased.
+- v0.1.0 could report a failed muting capture path as active. Permission denial
+  could therefore silence original playback while VolEq incorrectly appeared
+  active; the Unreleased lifecycle now stays non-running until the real pipeline
+  has started and callback progress is observed.
+- v0.1.0 could retain a stale muting Core Audio graph across system sleep while
+  still appearing active. The earlier successful sleep/wake evidence is
+  withdrawn; the replacement behavior under Unreleased requires signed-bundle
+  owner validation.
 - Processing operates on the combined captured mix rather than maintaining a
   separate level for each meeting participant.
 - Speech-aware processing supports validated 16, 44.1, and 48 kHz routes.
