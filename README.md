@@ -22,7 +22,7 @@ Download the latest Apple Silicon DMG from
 [GitHub Releases](https://github.com/DPatrikI/voleq-community/releases), open it,
 and drag **VolEq** to **Applications**. Start playback, choose an application or
 device-wide capture, select **Start**, and follow the macOS System Audio
-Recording prompt. **No sound?** opens the relevant System Settings page.
+Recording prompt.
 
 > Upgrading from 0.1.0? Remove `VolEq Community.app` before installing
 > `VolEq.app` so macOS does not retain two copies with the same identity.
