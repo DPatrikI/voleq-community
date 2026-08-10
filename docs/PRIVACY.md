@@ -4,15 +4,14 @@ VolEq processes captured application or device audio locally on the Mac. The
 Community application does not record captured audio, write it to disk, upload
 it, send it to an online service, or use it for telemetry.
 
-Before processing can start, VolEq uses a temporary unmuted, input-only Core
-Audio probe for the selected application or device-wide mix. It examines
-captured samples only through a preallocated in-memory signal latch, never
-replays them, never writes them to disk, and never changes the original output.
-The probe is destroyed before the real processing path is created. Denial,
-silence, timeout, cancellation, malformed input, and ordinary Core Audio
-startup failure leave processing stopped and the original audio unchanged when
-cleanup completes. If Core Audio refuses to stop or destroy a resource, VolEq
-retains ownership, requires Quit, and does not claim that restoration completed.
+Before the first processing attempt, VolEq explains why System Audio Recording
+access is needed and that captured audio remains local and in memory. Continue
+then starts the real Core Audio pipeline, which is what causes macOS to present
+its permission prompt. VolEq does not record a separate permission signal and
+does not infer permission from silence. Ordinary Core Audio startup failure
+leaves processing non-running and begins complete graph teardown. If Core Audio
+refuses to stop or destroy a resource, VolEq retains ownership, requires Quit,
+and does not claim that restoration completed.
 
 When speech-aware leveling is enabled, speech probability and denoised samples
 are calculated with one prepared RNNoise state per channel using the same
@@ -52,7 +51,9 @@ the user's IP address. GitHub's own privacy terms apply to its service.
 
 macOS controls System Audio Recording permission. VolEq requests only the
 permission needed for the selected capture mode. Device-wide capture excludes
-VolEq's own process to prevent feedback.
+VolEq's own process to prevent feedback. The always-visible **No sound?** help
+opens the relevant System Settings page and repeats the local-only privacy
+guarantee.
 
 This describes the current Community source tree. A future Premium application
 must document any additional diagnostics or services separately before they are

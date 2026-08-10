@@ -3,7 +3,19 @@
 set -euo pipefail
 
 REPOSITORY_ROOT="${0:A:h:h}"
-APP="$REPOSITORY_ROOT/dist/VolEq Community.app"
+BUILD_VARIANT="${1:-distribution}"
+case "$BUILD_VARIANT" in
+    distribution)
+        APP="$REPOSITORY_ROOT/dist/VolEq Community.app"
+        ;;
+    development)
+        APP="$REPOSITORY_ROOT/dist/VolEq Community Dev.app"
+        ;;
+    *)
+        echo "error: expected build variant 'distribution' or 'development'" >&2
+        exit 2
+        ;;
+esac
 EXECUTABLE="$REPOSITORY_ROOT/.build/release/VolEqCommunityMac"
 SPEECH_RESOURCE_BUNDLE="$REPOSITORY_ROOT/.build/release/VolEq_VolEqSpeech.bundle"
 COMMUNITY_RESOURCES="$REPOSITORY_ROOT/apps/macos/community/Resources"
@@ -27,6 +39,21 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$EXECUTABLE" "$APP/Contents/MacOS/VolEqCommunityMac"
 cp -R "$SPEECH_RESOURCE_BUNDLE" "$APP/Contents/Resources/VolEq_VolEqSpeech.bundle"
 cp "$INFO_PLIST" "$APP/Contents/Info.plist"
+if [[ "$BUILD_VARIANT" == "development" ]]; then
+    RELEASE_BUNDLE_IDENTIFIER="$(
+        plutil -extract CFBundleIdentifier raw -o - "$INFO_PLIST"
+    )"
+    RELEASE_DISPLAY_NAME="$(
+        plutil -extract CFBundleDisplayName raw -o - "$INFO_PLIST"
+    )"
+    plutil -replace CFBundleIdentifier \
+        -string "$RELEASE_BUNDLE_IDENTIFIER.development" \
+        "$APP/Contents/Info.plist"
+    plutil -replace CFBundleDisplayName -string "$RELEASE_DISPLAY_NAME Dev" \
+        "$APP/Contents/Info.plist"
+    plutil -replace CFBundleName -string "$RELEASE_DISPLAY_NAME Dev" \
+        "$APP/Contents/Info.plist"
+fi
 for (( INDEX = 1; INDEX <= ${#BRAND_RESOURCE_KEYS[@]}; INDEX++ )); do
     RESOURCE_KEY="${BRAND_RESOURCE_KEYS[$INDEX]}"
     EXPECTED_EXTENSION="${BRAND_RESOURCE_EXTENSIONS[$INDEX]}"

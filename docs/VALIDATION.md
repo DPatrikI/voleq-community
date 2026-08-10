@@ -35,48 +35,99 @@ Owner validation is therefore still required for uninterrupted real audio,
 VoiceOver traversal, the Menu Bar
 popover, and the rendered offline retry flow before release work begins.
 
-## System Audio Recording permission safety (0.1.1)
+## System Audio Recording startup behavior (0.1.1)
 
 The owner reproduced a v0.1.0 denial path that could report VolEq active while
 the `.mutedWhenTapped` tap silenced original audio. This invalidates the earlier
 permission-denial and permission-recovery release claim; it is not retained as
 passing evidence below.
 
-Focused deterministic coverage on `fix/audio-capture-permission-denial` passes:
+The current source deliberately does not treat captured signal as a permission
+API. Automated coverage establishes the following boundaries:
 
 | Check | Evidence |
 | --- | --- |
-| Explanation | Not Now creates no probe or processing resources; Continue persists and Not Now does not |
-| Ordering invariant | The real pipeline is unreachable until a verified probe has returned after teardown; blocked start completion precedes destruction; a probe claiming live resources is rejected |
-| Failure safety | Injected denial, timeout, cancellation, malformed-input, and Core Audio outcomes keep `isRunning == false`; a blocked device start is bounded by injected time |
-| Signal qualification | Two finite callbacks above `1e-7` qualify; one callback, silence, threshold/sub-threshold samples, NaN, infinity, and malformed byte counts do not |
-| Lifecycle | Denied and never-started paths destroy without an invalid Stop; injected probe and real-pipeline stop/destroy failures retain ownership and require Quit; fresh starts, checking-time route changes, recovery, and app termination reverify or tear down |
-| Concurrency | Duplicate Start and Check Again are rejected while checking; Cancel requests immediate ordered teardown |
-| Native recovery | Window and menu-bar presentations share Checking Audio Access, Cancel, Open System Settings, Check Again, manual-path, and relaunch guidance |
-| Realtime callback | The C11-atomic probe callback records zero allocations and contains no locks, logging, replay, or UI calls |
+| Explanation | Not Now creates no processing resources; Continue completes before the real pipeline is built |
+| Direct startup | Accepted Start and later restarts build the real pipeline directly without publishing Checking or Verified permission claims |
+| Platform authority | No temporary permission tap, signal threshold, 30-second access timer, or automatic permission reconstruction remains; macOS owns the prompt and permission state |
+| Troubleshooting | Both control surfaces always expose **No sound?**; its presentation explains local in-memory processing and opens System Audio Recording settings |
+| Failure safety | Pipeline construction/start failures remain non-running; partial resources follow the same retained dependent teardown, and cleanup refusal requires Quit |
+| Realtime callback | The processing heartbeat and DSP callback allocation coverage remains; no permission signal callback exists |
 
-Final branch evidence on 2026-08-07: `./dev doctor` passed all five environment
-checks; all 226 Swift tests passed; the release product compiled
-with complete strict concurrency and warnings as errors; `./dev build macos`
-produced an ad-hoc-signed app with valid resources, RNNoise model, property list,
-and the exact System Audio Recording usage copy; application version `0.1.0`
-and build `1` remained unchanged; `git diff --check` passed; and the unchanged
-48 kHz stereo benchmark measured 4.25% of one core against the 5% gate.
+The temporary permission-probe implementation's earlier 226-test and benchmark
+record is superseded and is not current release evidence. The combined current
+branch evidence, owner-run development-bundle result, and remaining physical
+validation boundary are recorded once in the sleep/wake section below.
 
-The rebuilt app was also exercised through a temporary, separately identified
-copy: a clean launch opened the utility window, and a live Window → Menu Bar →
-Window round trip returned to the window without an alert. A native hosted
-render verified the menu-bar surface at 360 by 560 points with visible controls,
-including Switch to Window. This is not a physical status-item click, VoiceOver
-traversal, permission prompt, or audio-path result.
+## Sleep/wake and stalled-callback recovery (0.1.1)
 
-The new behavior remains **pending physical owner validation** in a signed app
-bundle. Required cases are first-attempt Not Now; Continue followed by macOS
-denial; previously denied relaunch; grant and Check Again; any macOS-requested
-relaunch; application and device-wide capture; revocation while stopped;
-route recovery after permission changes; window and menu-bar modes; and
-built-in, wired, and Bluetooth output. Every denial or uncertain case must keep
-original audio audible and must never report Active.
+The owner later reproduced a v0.1.0 system-sleep failure: after wake VolEq still
+appeared Active, but a stale muting Core Audio graph produced no replacement
+sound until leveling was stopped and started again. This invalidates the earlier
+v0.1.0 sleep/wake passing claim. It is excluded from retained physical evidence
+below even though the original validation session exercised the case.
+
+The Unreleased implementation on `fix/sleep-wake-audio-recovery` has focused
+deterministic coverage for the replacement contract:
+
+| Check | Evidence |
+| --- | --- |
+| Proactive sleep safety | Active, preparing, route-recovering, and partially built graphs publish a non-running stopping/suspending state immediately. Retained pipeline construction finishes under a cancelled startup lease and then follows listener → I/O stop/destroy → aggregate → tap teardown off the main actor. A Start already executing in Core Audio is owned and receives an authoritative Stop; a Start still queued on its executor is cancelled before it can touch a torn-down graph. Neither case can prevent sleep, Stop, or terminate-later cleanup from beginning. Independently finishing stale preflight work is generation-gated and cannot publish or create a graph. Wake received during cleanup is coalesced, and a later sleep cancels that queued wake |
+| Resume intent | Already-stopped sessions do not restart; application and device-wide capture preserve mode, speech awareness, explicit user intent, and the latest leveling settings—including changes made after activation or while sleep cleanup, route readiness, or pipeline construction is in flight |
+| Stable route gate | Wake waits the injected one-second settling period, requires two matching valid observations 250 ms apart, races every observation against the remaining absolute 10-second deadline, and performs no automatic retry loop after permanent failure. A slow or hung observation cannot extend the window |
+| Route-monitor prerequisite | Default-output listener add/remove runs on a retained serial executor. A failed registration has a dedicated non-startable phase; Refresh preserves it and Start only retries registration, with no pipeline constructed while monitoring is unavailable |
+| Startup ordering | The first-use explanation completes before fresh target/route preflight and real-pipeline construction. There is no separate permission probe or signal-derived grant state. Recovery repeats target and route validation before rebuilding the real pipeline |
+| Callback health | A preallocated lock-free C11-atomic counter advances for every callback, including silence; two seconds without progress leaves Active, tears down, and schedules one shared recovery attempt |
+| Races and cancellation | Duplicate wake/watchdog delivery is deduplicated; sleep → wake during blocked cleanup → sleep cancels the queued recovery; the in-flight wake gate absorbs route notifications without resetting its one-second settle delay, and unchanged delayed notifications after replacement are compared with the active route instead of starting another recovery. Route-notification storms retain one comparison plus one pending recheck, and ingress yields after two deliveries so sustained producers cannot monopolize the main actor. Refresh storms retain one enumeration plus the latest request; the catalog executor admits one HAL read and rejects followers instead of queueing behind blocked work. Sleep during startup/recovery/active processing tears down; Stop, Cancel, and Quit prevent late activation |
+| Capture identity | Every application start resolves PID plus bundle ID from a fresh process list after any first-use explanation; production pipeline construction validates the resolved target again before creating the tap. Device-wide construction independently resolves VolEq's own current process object at the final tap boundary so stale self-exclusion cannot create feedback. Reused IDs, bundleless, missing, ambiguous, or unexpectedly moved targets fail safely |
+| Core Audio input hardening | Array reads cap the first HAL allocation at one MiB and use the byte count returned by the second query; a shrinking process list skips the absent tail, while oversized, growing, and partial-element sizes fail safely. One format validator rejects unsupported or non-finite rates, non-native/unpacked Float32 PCM, and inconsistent frame/packet strides before audio starts |
+| Failed cleanup | Listener removal is independent; failed I/O destruction retains its matching device, aggregate, and tap, and aggregate failure retains the tap. The pipeline owner persists prepared, Start-pending, running, and stopped callback state. Successful Stop state persists across cleanup retries, while pending Start requires an authoritative post-completion Stop before destruction. Any unresolved ownership reports `isRunning == false` and blocks replacement |
+| Native integration | Injectable workspace notifications independently forward sleep/wake to audio and wake/activation to updates; AppKit termination returns `terminateLater` until audio teardown finishes; one atomic state snapshot drives both accessible control surfaces, presents retained cleanup as Stopping, rejects stale application selections, and disables primary actions while ownership blocks commands. The native first-use explanation precedes pipeline creation, and both surfaces always expose the same **No sound?** privacy/settings help. Published recovery transitions are consumed in order so fast completion/cancellation remains announced without launch noise; shell commands are verified through controllable action handlers. A WindowServer-backed local render samples coordinate-correct regions around named status, capture, and lower-action controls; GitHub's headless runner intentionally skips that pixel assertion while retaining the behavioral surface matrix |
+| Real-time safety | The heartbeat increment records zero allocations and performs one relaxed C11-atomic operation with no lock, logging, UI, task, or clock work in the callback |
+
+The five focused lifecycle suites pass 55 deterministic tests, split across
+sleep/wake, route recovery, callback health, identity restoration, and
+cancellation. Twelve direct coordinator tests and 13 pure state-machine/reducer tests cover illegal transitions, stale
+events, refresh failures, the route-monitor prerequisite, system-mode catalog
+independence, and derived snapshots. On the current simplified tree, the
+complete Swift suite passed all 329 tests; the release product
+compiled with complete strict concurrency and warnings as errors;
+`./dev build macos` verified the packaged RNNoise model, branding, ad hoc
+signature, and Info.plist. The contributor run path packages a separately
+identified `VolEq Community Dev.app`, preventing an installed Developer-ID
+build from being mistaken for the ad-hoc build in System Audio Recording
+settings. The release heartbeat disassembly is only
+`cbz`/`mov`/`ldadd`/`ret`.
+The canonical 48 kHz stereo benchmark used 2.614 seconds of
+thread CPU for 60 seconds of audio (4.36% of one core on
+MacBookPro18,3). Release metadata remained VolEq Community 0.1.0 (1), as
+required for this uncommitted v0.1.1 preparation branch.
+
+The owner confirmed the simplified first-use permission/start flow and an
+extended unattended leveling session in the local development bundle. This is
+useful physical evidence, but the broader signed-bundle matrix remains pending.
+Required physical coverage still includes:
+
+- application and device-wide capture;
+- active leveling followed by Apple-menu sleep and wake;
+- lid-close sleep and wake;
+- display sleep or screen lock without full system sleep;
+- wake while playback resumes immediately;
+- wake while silent, followed by starting playback later;
+- five repeated sleep/wake cycles;
+- Stop during wake recovery;
+- System Audio Recording permission revocation while asleep;
+- output-device change while asleep;
+- selected application quitting or relaunching while asleep;
+- built-in speakers, wired output, AirPods Pro 2, and Sennheiser HDB 630;
+- Bluetooth regular playback and microphone-active call modes; and
+- utility-window and menu-bar presentation, including accessible status and
+  actions.
+
+In every uncertain or failed case, original audio must remain audible and VolEq
+must never report Active without verified callback progress. Automated teardown,
+race, allocation, build, and benchmark evidence does not establish those
+physical audio, device, or accessibility results.
 
 ## Lookahead leveling
 
@@ -354,14 +405,15 @@ Physical coverage included Teams, Zoom, and Google Meet in Safari; built-in
 speakers; 3.5 mm output; AirPods Pro 2; and Sennheiser HDB 630. Both Bluetooth
 devices were exercised in regular playback and microphone-active call mode.
 Application-specific and device-wide capture, live route switching, captured
-process loss, sleep/wake, frontend, accessibility and failure states, videos,
+process loss, frontend, accessibility and failure states, videos,
 music, clean and noisy speech,
 quiet-to-loud transitions, static, and microphone bumps produced the expected
 results. Stop and quit restored the original audio path.
 
-Permission denial and recovery are intentionally excluded from this retained
-v0.1.0 evidence. The owner later reproduced a denial path that muted original
-audio, so signed-bundle denial, grant, relaunch, and recovery validation must be
+Permission denial/recovery and sleep/wake are intentionally excluded from this
+retained v0.1.0 evidence. The owner later reproduced one denial path that muted
+original audio and one wake path that retained a stale muting graph without
+replacement sound. Signed-bundle permission and sleep/wake validation must be
 repeated against the Unreleased 0.1.1 implementation.
 
 The longest uninterrupted session exceeded eight hours. No robotic processing,

@@ -15,14 +15,26 @@ Complete for v0.1.0. Automated checks cover lookahead, speech classification,
 suppression, conversion, failure recovery, callback allocation, resources, and
 the 5% CPU gate. Owner-run physical validation covers M1 and M4 MacBook Pros,
 Teams, Zoom, Google Meet in Safari, built-in and wired output, AirPods Pro 2,
-Sennheiser HDB 630, regular and microphone-active Bluetooth modes, lifecycle
-recovery, UI/accessibility states, and sessions exceeding eight hours.
+Sennheiser HDB 630, regular and microphone-active Bluetooth modes, selected
+lifecycle cases, UI/accessibility states, and sessions exceeding eight hours.
+The later reproduced sleep/wake and permission-denial failures withdraw those
+specific passing claims; their Unreleased replacements remain pending physical
+revalidation.
 
 The exact tested scope and explicit non-claims are recorded in
 [COMPATIBILITY.md](COMPATIBILITY.md); automated and physical evidence remain
 separate in [VALIDATION.md](VALIDATION.md).
 
-## 0.1.1 — Automatic update checks
+## 0.1.1 — Safety recovery and automatic update checks
+
+- [x] Tear down the muting Core Audio graph proactively before system sleep and
+  rebuild only after a stable output route and fresh target validation.
+- [x] Add callback-progress monitoring and route sleep, wake, output changes,
+  and stalls through one serialized recovery coordinator.
+- [x] Preserve application identity, device-wide intent, processing settings,
+  cancellation, and fail-safe retry behavior through deterministic tests.
+- [ ] Complete signed-bundle owner validation for sleep/wake, permission,
+  output-device, application-target, presentation, and repeated-cycle cases.
 
 - [x] Add dependency-free manual checks through the latest published GitHub
   Release.

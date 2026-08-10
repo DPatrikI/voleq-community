@@ -11,7 +11,7 @@ import XCTest
 final class SystemAudioAccessPresentationTests: XCTestCase {
     func testContinuePersistsExplanationAcceptance() async throws {
         let defaults = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: try! XCTUnwrap(defaultsSuiteName(defaults))) }
+        defer { removeTestDefaults(defaults) }
         let controller = SystemAudioAccessPresentationController(defaults: defaults)
 
         let request = Task { await controller.requestExplanationAcceptance() }
@@ -32,7 +32,7 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
 
     func testNotNowDoesNotPersistAndExplanationReturnsLater() async throws {
         let defaults = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: try! XCTUnwrap(defaultsSuiteName(defaults))) }
+        defer { removeTestDefaults(defaults) }
         let controller = SystemAudioAccessPresentationController(defaults: defaults)
 
         let first = Task { await controller.requestExplanationAcceptance() }
@@ -52,94 +52,132 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
         XCTAssertFalse(secondAcceptance)
     }
 
+    func testConcurrentExplanationRequestsShareTheVisibleDecision() async throws {
+        let defaults = try makeDefaults()
+        defer { removeTestDefaults(defaults) }
+        let controller = SystemAudioAccessPresentationController(defaults: defaults)
+
+        let requestBeforeSleep = Task {
+            await controller.requestExplanationAcceptance()
+        }
+        await waitUntil { controller.shouldPresentExplanation }
+        let replacementRequestAfterWake = Task {
+            await controller.requestExplanationAcceptance()
+        }
+        await Task.yield()
+
+        XCTAssertTrue(controller.shouldPresentExplanation)
+        controller.respondToExplanation(continued: true)
+
+        let firstAccepted = await requestBeforeSleep.value
+        let replacementAccepted = await replacementRequestAfterWake.value
+        XCTAssertTrue(firstAccepted)
+        XCTAssertTrue(replacementAccepted)
+        XCTAssertFalse(controller.shouldPresentExplanation)
+    }
+
+    func testCancelledExplanationRequestIsRemovedBeforeLaterStart() async throws {
+        let defaults = try makeDefaults()
+        defer { removeTestDefaults(defaults) }
+        let controller = SystemAudioAccessPresentationController(defaults: defaults)
+
+        let cancelledRequest = Task {
+            await controller.requestExplanationAcceptance()
+        }
+        await waitUntil { controller.shouldPresentExplanation }
+        cancelledRequest.cancel()
+
+        let cancelled = await cancelledRequest.value
+        XCTAssertFalse(cancelled)
+        await waitUntil { !controller.shouldPresentExplanation }
+
+        let laterRequest = Task {
+            await controller.requestExplanationAcceptance()
+        }
+        await waitUntil { controller.shouldPresentExplanation }
+        controller.respondToExplanation(continued: true)
+
+        let accepted = await laterRequest.value
+        XCTAssertTrue(accepted)
+        XCTAssertFalse(controller.shouldPresentExplanation)
+    }
+
+    func testNoSoundHelpIsAlwaysAvailableAndUsesPrivacyCopy() throws {
+        let defaults = try makeDefaults()
+        defer { removeTestDefaults(defaults) }
+        let controller = SystemAudioAccessPresentationController(defaults: defaults)
+
+        XCTAssertFalse(controller.shouldPresentNoSoundHelp)
+        controller.presentNoSoundHelp()
+        XCTAssertTrue(controller.shouldPresentNoSoundHelp)
+        XCTAssertTrue(SystemAudioAccessPresentationController.noSoundCopy.contains(
+            "does not record, save, upload"
+        ))
+        XCTAssertTrue(SystemAudioAccessPresentationController.noSoundCopy.contains(
+            "System Audio Recording permission"
+        ))
+        XCTAssertTrue(SystemAudioAccessPresentationController.noSoundCopy.contains(
+            "Privacy & Security → Screen & System Audio Recording"
+        ))
+        controller.dismissNoSoundHelp()
+        XCTAssertFalse(controller.shouldPresentNoSoundHelp)
+    }
+
     func testSettingsNavigationUsesDirectPaneWhenSupported() throws {
         let defaults = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: try! XCTUnwrap(defaultsSuiteName(defaults))) }
+        defer { removeTestDefaults(defaults) }
         let opener = RecordingSystemSettingsOpener(results: [true])
         let controller = SystemAudioAccessPresentationController(
             defaults: defaults,
             settingsOpener: opener
         )
 
-        controller.openSystemAudioRecordingSettings()
+        let outcome = controller.openSystemAudioRecordingSettings()
 
+        XCTAssertEqual(outcome, .opened)
         XCTAssertEqual(opener.openedURLs.count, 1)
         XCTAssertTrue(opener.openedURLs[0].absoluteString.contains("Privacy_ScreenCapture"))
-        XCTAssertTrue(controller.settingsFallbackMessage?.contains(
-            "Screen & System Audio Recording"
-        ) == true)
     }
 
-    func testSettingsNavigationFailureOpensPrivacyAndShowsManualPath() throws {
+    func testDirectNavigationFailureFallsBackToPrivacySettings() throws {
         let defaults = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: try! XCTUnwrap(defaultsSuiteName(defaults))) }
+        defer { removeTestDefaults(defaults) }
         let opener = RecordingSystemSettingsOpener(results: [false, true])
         let controller = SystemAudioAccessPresentationController(
             defaults: defaults,
             settingsOpener: opener
         )
 
-        controller.openSystemAudioRecordingSettings()
+        let outcome = controller.openSystemAudioRecordingSettings()
 
+        XCTAssertEqual(outcome, .opened)
         XCTAssertEqual(opener.openedURLs.count, 2)
         XCTAssertTrue(opener.openedURLs[1].absoluteString.contains("preference.security"))
-        XCTAssertTrue(controller.settingsFallbackMessage?.contains(
-            "could not navigate directly"
-        ) == true)
-        XCTAssertTrue(controller.settingsFallbackMessage?.contains(
-            "Screen & System Audio Recording"
-        ) == true)
-        XCTAssertTrue(controller.settingsFallbackMessage?.contains("quit and reopen") == true)
     }
 
-    func testSettingsNavigationTotalFailureIsExplicit() throws {
+    func testSettingsNavigationTotalFailureReturnsManualInstructions() throws {
         let defaults = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: try! XCTUnwrap(defaultsSuiteName(defaults))) }
+        defer { removeTestDefaults(defaults) }
         let opener = RecordingSystemSettingsOpener(results: [false, false])
         let controller = SystemAudioAccessPresentationController(
             defaults: defaults,
             settingsOpener: opener
         )
 
-        controller.openSystemAudioRecordingSettings()
+        let outcome = controller.openSystemAudioRecordingSettings()
 
         XCTAssertEqual(opener.openedURLs.count, 2)
-        XCTAssertTrue(controller.settingsFallbackMessage?.contains(
-            "could not open System Settings automatically"
-        ) == true)
-        XCTAssertTrue(controller.settingsFallbackMessage?.contains(
-            "Screen & System Audio Recording"
-        ) == true)
-    }
-
-    func testNativeCopyAndBothControlSurfacesExposeRecoveryActions() throws {
-        let sources = repositoryRoot()
-            .appendingPathComponent("apps/macos/community/Sources/VolEqCommunityMac")
-        let appDelegate = try String(
-            contentsOf: sources.appendingPathComponent("AppDelegate.swift")
+        XCTAssertEqual(
+            outcome,
+            .failed(
+                manualInstructions: SystemAudioAccessPresentationController
+                    .manualSettingsPath
+            )
         )
-        let surfaces = try String(
-            contentsOf: sources.appendingPathComponent("VolEqControlSurfaces.swift")
-        )
-        let presentation = try String(
-            contentsOf: sources.appendingPathComponent("SystemAudioAccessPresentation.swift")
-        )
-
-        XCTAssertTrue(presentation.contains("System Audio Access Is Required"))
-        XCTAssertTrue(presentation.contains("Audio stays in memory and is never saved, uploaded, or used for telemetry."))
-        XCTAssertTrue(appDelegate.contains("withTitle: \"Continue\""))
-        XCTAssertTrue(appDelegate.contains("withTitle: \"Not Now\""))
-        XCTAssertGreaterThanOrEqual(
-            surfaces.components(separatedBy: "AudioAccessActions(").count - 1,
-            2
-        )
-        XCTAssertTrue(surfaces.contains("Button(\"Open System Settings…\")"))
-        XCTAssertTrue(surfaces.contains("Button(\"Check Again\")"))
-        XCTAssertTrue(surfaces.contains("Button(\"Cancel\")"))
-        XCTAssertTrue(surfaces.contains("Button(\"Switch to Window\")"))
-        XCTAssertTrue(surfaces.contains(".frame(width: 360, height: 560)"))
-        XCTAssertTrue(surfaces.contains("Check for Updates…"))
-        XCTAssertTrue(surfaces.contains("Settings…"))
+        guard case let .failed(manualInstructions) = outcome else {
+            return XCTFail("Total navigation failure must surface manual instructions")
+        }
+        XCTAssertTrue(manualInstructions.contains("Screen & System Audio Recording"))
     }
 
     func testUsageDescriptionUsesRequiredPrivacyCopy() throws {
@@ -159,26 +197,13 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
 
     @available(macOS 14.2, *)
     func testMenuBarSurfaceRendersFullViewport() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+            "AppKit pixel evidence requires a WindowServer-backed local session; behavioral surface coverage still runs in GitHub Actions."
+        )
         let defaults = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: try! XCTUnwrap(defaultsSuiteName(defaults))) }
-        let audio = AudioCaptureController(installSystemObservers: false)
-        let model = VolEqApplicationModel(
-            defaults: defaults,
-            installedVersion: .zero,
-            audioController: audio
-        )
-        let surface = MenuBarControlSurface(
-            model: audio,
-            systemAudioAccess: model.systemAudioAccess,
-            updates: model.updates,
-            openSettings: {},
-            switchToWindow: {}
-        )
-        .environment(\.colorScheme, .dark)
-        .background(Color(nsColor: .windowBackgroundColor))
-        let hostingView = NSHostingView(rootView: surface)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 360, height: 560)
-        hostingView.layoutSubtreeIfNeeded()
+        defer { removeTestDefaults(defaults) }
+        let hostingView = makeMenuBarHostingView(defaults: defaults)
 
         let bitmap = try XCTUnwrap(
             hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)
@@ -189,19 +214,57 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
         XCTAssertEqual(hostingView.bounds.height, 560, accuracy: 0.5)
         let background = try XCTUnwrap(bitmap.colorAt(x: 5, y: 5))
             .usingColorSpace(.deviceRGB)
-        let hasVisibleContent = stride(from: 8, to: bitmap.pixelsHigh, by: 8)
-            .contains { y in
-                stride(from: 8, to: bitmap.pixelsWide, by: 8).contains { x in
+        let pixelScaleX = CGFloat(bitmap.pixelsWide) / hostingView.bounds.width
+        let pixelScaleY = CGFloat(bitmap.pixelsHigh) / hostingView.bounds.height
+        let bitmapRowsFromTop: (Range<CGFloat>) -> Range<Int> = { points in
+            // `cacheDisplay` preserves this flipped SwiftUI backing store's
+            // top-origin row order in the bitmap representation.
+            let lowerEdge = Int(points.lowerBound * pixelScaleY)
+            let upperEdge = Int(points.upperBound * pixelScaleY)
+            return max(0, lowerEdge)..<min(bitmap.pixelsHigh, upperEdge)
+        }
+        let visibleSampleCount: (CGRect) -> Int = { rect in
+            let columns = Int(rect.minX * pixelScaleX)..<min(
+                bitmap.pixelsWide,
+                Int(rect.maxX * pixelScaleX)
+            )
+            let rows = bitmapRowsFromTop(rect.minY..<rect.maxY)
+            var count = 0
+            for x in stride(from: columns.lowerBound, to: columns.upperBound, by: 3) {
+                for y in stride(from: rows.lowerBound, to: rows.upperBound, by: 3) {
                     guard let color = bitmap.colorAt(x: x, y: y)?
                         .usingColorSpace(.deviceRGB),
                         let background
-                    else { return false }
-                    return abs(color.redComponent - background.redComponent) > 0.2
+                    else { continue }
+                    if abs(color.redComponent - background.redComponent) > 0.2
                         || abs(color.greenComponent - background.greenComponent) > 0.2
                         || abs(color.blueComponent - background.blueComponent) > 0.2
+                    {
+                        count += 1
+                    }
                 }
             }
-        XCTAssertTrue(hasVisibleContent, "The menu-bar surface must render visible controls")
+            return count
+        }
+
+        let namedRegions: [(String, CGRect)] = [
+            ("runtime status", CGRect(x: 40, y: 55, width: 190, height: 70)),
+            ("primary action", CGRect(x: 255, y: 70, width: 70, height: 45)),
+            ("capture mode", CGRect(x: 40, y: 180, width: 195, height: 30)),
+            ("application picker", CGRect(x: 115, y: 215, width: 205, height: 35)),
+            ("speech toggle", CGRect(x: 300, y: 260, width: 25, height: 25)),
+            ("update action", CGRect(x: 40, y: 315, width: 155, height: 30)),
+            ("window action", CGRect(x: 40, y: 350, width: 155, height: 30)),
+            ("settings action", CGRect(x: 235, y: 350, width: 90, height: 30)),
+            ("quit action", CGRect(x: 40, y: 385, width: 90, height: 30)),
+        ]
+        for (name, region) in namedRegions {
+            XCTAssertGreaterThan(
+                visibleSampleCount(region),
+                8,
+                "The menu-bar surface must render its \(name) in the expected viewport region"
+            )
+        }
 
         if let outputPath = ProcessInfo.processInfo.environment[
             "VOLEQ_MENU_RENDER_PATH"
@@ -222,8 +285,40 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
         return defaults
     }
 
-    private func defaultsSuiteName(_ defaults: UserDefaults) -> String? {
-        defaults.string(forKey: "testSuiteName")
+    @available(macOS 14.2, *)
+    private func makeMenuBarHostingView(
+        defaults: UserDefaults
+    ) -> NSHostingView<AnyView> {
+        let audio = AppAudioTestRig().makeController()
+        let model = VolEqApplicationModel(
+            defaults: defaults,
+            installedVersion: .zero,
+            audioController: audio
+        )
+        let surface = MenuBarControlSurface(
+            model: audio,
+            systemAudioAccess: model.systemAudioAccess,
+            updates: model.updates,
+            actions: ApplicationShellActions(
+                updates: model.updates,
+                openSettings: {},
+                quit: {}
+            ),
+            switchToWindow: {}
+        )
+        .environment(\.colorScheme, .dark)
+        .background(Color(nsColor: .windowBackgroundColor))
+        let hostingView = NSHostingView(rootView: AnyView(surface))
+        hostingView.frame = NSRect(x: 0, y: 0, width: 360, height: 560)
+        hostingView.layoutSubtreeIfNeeded()
+        return hostingView
+    }
+
+    private func removeTestDefaults(_ defaults: UserDefaults) {
+        guard let suite = defaults.string(forKey: "testSuiteName") else {
+            return XCTFail("Test defaults lost their suite identity")
+        }
+        defaults.removePersistentDomain(forName: suite)
     }
 
     private func waitUntil(
@@ -232,8 +327,9 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
     ) async {
         for _ in 0..<attempts {
             if condition() { return }
-            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
         }
+        XCTFail("Timed out waiting for presentation state")
     }
 
     private func repositoryRoot() -> URL {
@@ -245,6 +341,7 @@ final class SystemAudioAccessPresentationTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
     }
+
 }
 
 private final class RecordingSystemSettingsOpener: SystemSettingsOpening {

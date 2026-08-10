@@ -12,17 +12,28 @@ and loud speakers are less overwhelming.
 Download the Apple Silicon DMG from
 [GitHub Releases](https://github.com/DPatrikI/voleq-community/releases), open it,
 and drag **VolEq Community** to **Applications**. Launch the installed app and
-start audio in the application you want to level. On the first Start attempt,
-VolEq explains why access is needed before macOS asks for System Audio Recording
-permission. Keep that audio playing while VolEq verifies access. The original
-audio remains unchanged until access is verified and the processing path is
-successfully active.
+start audio in the application you want to level, choose Start, and follow the
+macOS System Audio Recording prompt.
 
 > **Known v0.1.0 issue:** the published 0.1.0 build can incorrectly enter a
 > muting capture path after System Audio Recording access is denied. Stop or
 > quit VolEq to restore the original path. The Unreleased 0.1.1 fix described
 > in this source tree is pending signed-bundle owner validation and has not yet
 > been released.
+>
+> The owner also reproduced a v0.1.0 sleep/wake failure where VolEq still
+> appeared active but produced no sound until stopped and restarted. The
+> Unreleased 0.1.1 source immediately leaves Active when sleep begins, tears
+> down the old graph, and rebuilds from scratch after wake only once cleanup
+> finishes. That replacement behavior is also pending
+> signed-bundle owner validation.
+
+In the Unreleased source, the first Start attempt explains why access is needed
+before macOS asks for System Audio Recording permission. VolEq then starts the
+real audio path, which causes macOS to present its permission prompt. macOS does
+not provide VolEq with a separate permission-status API, so VolEq does not try
+to infer the setting from captured samples. The always-available **No sound?**
+help opens the correct System Settings page if playback is missing.
 
 VolEq Community 0.1.0 requires an Apple Silicon Mac running macOS 14.2 or newer.
 See the [tested compatibility matrix](docs/COMPATIBILITY.md) for the exact Macs,
@@ -61,8 +72,11 @@ base leveler uses 20 ms lookahead.
 - Speech-aware processing is validated at 16, 44.1, and 48 kHz. Fractional
   10 ms rates such as 22.05 kHz are rejected before VolEq replaces the original
   audio.
-- An output change stops processing, restores the original path, and repeats
-  the unmuted access check before rebuilding the processing route.
+- An output change stops processing, restores the original path when cleanup
+  completes, validates the new route, and rebuilds the processing path.
+- The published 0.1.0 build has a known sleep/wake lifecycle defect. The
+  Unreleased source contains a recovery fix, but signed-bundle sleep/wake and
+  device coverage is still pending.
 - Only applications currently producing audio appear in application capture.
 - Singing may be classified as speech and receive leveling or mild suppression.
 - The official 0.1.0 binary is arm64-only; Intel Macs are not supported.
@@ -78,9 +92,15 @@ Building requires Xcode or Apple Command Line Tools with Swift 5.10 or newer.
 ./dev run macos
 ```
 
-The contributor build is assembled and ad-hoc signed at
-`dist/VolEq Community.app`. Official Developer ID signing and notarization use
-the maintainer-only `./dev package macos` workflow documented in
+`./dev build macos` assembles the release-shaped, ad-hoc-signed artifact at
+`dist/VolEq Community.app`. `./dev run macos` launches a separately identified
+`dist/VolEq Community Dev.app`, so its local System Audio Recording grant cannot
+be confused with an installed release. Ad-hoc signatures identify one exact
+build: after rebuilding the development app, macOS may require access to be
+granted again. If it asks you to quit and reopen the app after granting access,
+run `open "dist/VolEq Community Dev.app"` so the permitted binary is relaunched
+without another rebuild. Official Developer ID signing and notarization use the
+maintainer-only `./dev package macos` workflow documented in
 [RELEASING.md](docs/RELEASING.md).
 
 ## How it works
@@ -90,13 +110,29 @@ it, and send it to the current output device. Bundled RNNoise states and Apple's
 offline SoundAnalysis framework authorize quiet-speech gain and mild
 suppression. Loud content retains downward peak protection regardless of its
 classification. VolEq mutes the selected original stream only while its
-replacement path is active. Before every fresh start and route rebuild, an
-unmuted input-only probe verifies two callbacks containing real finite audio;
-the probe is destroyed before the muting replacement path is created. A denied,
-cancelled, silent, timed-out, malformed, or ordinary startup failure leaves
-VolEq stopped and the original audio unchanged when cleanup completes. If Core
-Audio refuses cleanup, VolEq retains the affected resources, requires Quit, and
-does not claim restoration.
+replacement path is active. The first Start explains the local-only audio use,
+then the real Core Audio pipeline triggers macOS's System Audio Recording
+prompt. VolEq does not run a second signal-based permission probe and does not
+claim that silence means permission was denied. If startup or cleanup fails,
+VolEq leaves the public state non-running; unresolved Core Audio ownership
+requires Quit and blocks replacement.
+
+Default-output monitoring must be installed before any graph starts. For
+application capture, VolEq freshly resolves PID plus bundle identity before
+construction, and the production pipeline validates that identity again before
+creating its tap. Missing, ambiguous, bundleless, reused, or unexpectedly moved
+targets fail safely.
+
+When full system sleep begins, the Unreleased lifecycle coordinator snapshots
+user intent, immediately leaves Active, and starts tearing down listeners, the
+I/O proc, aggregate device, muting tap, and processors. Wake is coalesced until
+that cleanup completes. Recovery then waits one second, requires two matching
+valid output-route observations 250 ms apart within a bounded 10-second window,
+refreshes application processes and builds a new graph. Application capture is restored by process and bundle
+identity and never silently switches to an unrelated process. A preallocated
+C11-atomic callback heartbeat is checked every 250 ms; two seconds without
+progress leaves Active, tears down the graph, and uses the same serialized
+recovery path. Silent audio with continuing callbacks remains healthy.
 
 No virtual audio driver, permanent output-device change, online audio service,
 or model download is required. The optional first-party update checker reads the
@@ -106,21 +142,44 @@ See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the audio pipeline and
 
 ## System Audio Recording troubleshooting
 
-If VolEq says audio access could not be verified:
+If VolEq is active but you hear no sound, choose the always-visible
+**No sound?** button. This explains that System Audio Recording access may be
+missing or disabled, reiterates that VolEq processes audio only in memory and
+never records, saves, uploads, or sends it as telemetry, and provides an
+**Open System Settings…** button for **Privacy & Security → Screen & System
+Audio Recording**.
 
-1. Keep the selected application or device-wide mix audibly playing. Silence is
-   indistinguishable from unavailable access through the public Core Audio API.
-2. Choose **Open System Settings…** and confirm VolEq under **Privacy &
-   Security → Screen & System Audio Recording**.
-3. If macOS asks you to quit and reopen VolEq after changing access, do that
-   before choosing **Check Again**.
-4. Confirm the correct application is still producing audio and that the output
-   device is available, then choose **Check Again**.
+For a source build, grant access to **VolEq Community Dev**, not an installed
+**VolEq Community** release. After granting access, relaunch the already built
+binary with `open "dist/VolEq Community Dev.app"`; running another build first
+changes an ad-hoc app's code identity and may require a new grant.
 
-VolEq does not claim that a timed-out check means permission was denied. In all
-unverified states, processing remains stopped and the original audio should
-remain audible. Settings and update checking remain available without audio
-access.
+macOS owns the permission state and prompt. VolEq deliberately does not infer
+that state from silence or add a separate 30-second verification workflow.
+Settings and update checking remain available without audio access.
+
+## Sleep and wake troubleshooting
+
+The published 0.1.0 build can appear active but stop producing sound after full
+system sleep. Stop leveling or quit VolEq to restore the original path, then
+start again. The Unreleased 0.1.1 source replaces that behavior but is not yet a
+released or owner-validated fix.
+
+In a build containing the Unreleased fix:
+
+1. **Paused for System Sleep** confirms that VolEq left Active and is tearing
+   down the old graph. Original audio is expected after cleanup succeeds.
+2. **Restoring Leveling** means original audio should remain available while
+   the output route settles and the processing path is rebuilt.
+3. **Leveling Did Not Resume** is a safe stopped state. Confirm the output is
+   available, then choose **Try Again**.
+4. If an application quit or relaunched and VolEq cannot restore it uniquely,
+   select that application again before choosing **Try Again**.
+
+Display sleep and screen lock do not themselves stop a healthy graph; VolEq
+uses callback progress rather than display state. If any uncertain recovery
+case silences original audio or reports Active without sound, stop or quit
+VolEq and report the output device, capture mode, and sleep method used.
 
 ## Community edition
 

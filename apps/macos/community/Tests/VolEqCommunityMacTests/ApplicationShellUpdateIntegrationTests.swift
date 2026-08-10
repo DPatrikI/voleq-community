@@ -2,63 +2,64 @@
 
 import Foundation
 import XCTest
+@testable import VolEqCommunityMac
 
+@MainActor
 final class ApplicationShellUpdateIntegrationTests: XCTestCase {
-    func testEveryRequiredManualAndBackgroundUpdateAccessPointIsWired() throws {
-        let sources = sourceDirectory
-        let app = try String(
-            contentsOf: sources.appendingPathComponent("VolEqCommunityMacApp.swift"),
-            encoding: .utf8
+    func testUpdateActionsDelegateToTheControllableUpdateModel() async throws {
+        let updates = RecordingApplicationUpdateCommands()
+        let actions = ApplicationShellActions(
+            updates: updates,
+            openSettings: {},
+            quit: {}
         )
-        let settings = try String(
-            contentsOf: sources.appendingPathComponent("PresentationSettingsView.swift"),
-            encoding: .utf8
-        )
-        let surfaces = try String(
-            contentsOf: sources.appendingPathComponent("VolEqControlSurfaces.swift"),
-            encoding: .utf8
+        let releaseURL = try XCTUnwrap(URL(
+            string: "https://github.com/patrikistvandoczy/voleq/releases/tag/v0.2.0"
+        ))
+        let release = KnownAvailableUpdate(
+            version: try ApplicationVersion(installedVersionString: "0.2.0"),
+            releaseURL: releaseURL
         )
 
-        XCTAssertTrue(app.contains("CommandGroup(after: .appInfo)"))
-        XCTAssertTrue(app.contains("\"Checking for Updates…\""))
-        XCTAssertTrue(app.contains("\"Check for Updates…\""))
-        XCTAssertTrue(settings.contains("Button(\"Check Now\")"))
-        XCTAssertTrue(settings.contains("Automatically check for updates"))
-        XCTAssertTrue(surfaces.contains("struct UtilityWindowView"))
-        XCTAssertTrue(surfaces.contains("struct MenuBarControlSurface"))
-        XCTAssertEqual(
-            surfaces.components(separatedBy: "UpdateAvailableIndicator(updates: updates").count - 1,
-            2
-        )
-        XCTAssertTrue(surfaces.contains("Button(\"Check for Updates…\")"))
+        await actions.checkForUpdates()
+        let opened = actions.viewRelease(release)
+
+        XCTAssertEqual(updates.manualCheckCount, 1)
+        XCTAssertEqual(updates.openedReleases, [release])
+        XCTAssertTrue(opened)
     }
 
-    func testConsentCopyExplicitQuitAndSafeReleaseActionsRemainReachable() throws {
-        let appDelegate = try String(
-            contentsOf: sourceDirectory.appendingPathComponent("AppDelegate.swift"),
-            encoding: .utf8
-        )
-        let surfaces = try String(
-            contentsOf: sourceDirectory.appendingPathComponent("VolEqControlSurfaces.swift"),
-            encoding: .utf8
+    func testSettingsAndQuitActionsRemainBehaviorallyReachable() {
+        let updates = RecordingApplicationUpdateCommands()
+        var settingsCount = 0
+        var quitCount = 0
+        let actions = ApplicationShellActions(
+            updates: updates,
+            openSettings: { settingsCount += 1 },
+            quit: { quitCount += 1 }
         )
 
-        XCTAssertTrue(appDelegate.contains("Enable Daily Checks"))
-        XCTAssertTrue(appDelegate.contains("Don’t Check Automatically"))
-        XCTAssertTrue(appDelegate.contains("No audio or usage data is sent"))
-        XCTAssertTrue(appDelegate.contains("View Release"))
-        XCTAssertTrue(appDelegate.contains("Retry"))
-        XCTAssertTrue(appDelegate.contains("Couldn’t Open Release"))
-        XCTAssertTrue(appDelegate.contains("keyEquivalent = \"\\u{1b}\""))
-        XCTAssertTrue(surfaces.contains("Button(\"Quit VolEq\")"))
-        XCTAssertTrue(surfaces.contains("NSApp.terminate(nil)"))
+        actions.openSettings()
+        actions.quit()
+
+        XCTAssertEqual(settingsCount, 1)
+        XCTAssertEqual(quitCount, 1)
     }
 
-    private var sourceDirectory: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/VolEqCommunityMac")
+}
+
+@MainActor
+private final class RecordingApplicationUpdateCommands:
+    ApplicationUpdateCommandHandling {
+    private(set) var manualCheckCount = 0
+    private(set) var openedReleases: [KnownAvailableUpdate] = []
+
+    func checkManually() async {
+        manualCheckCount += 1
+    }
+
+    func openRelease(_ update: KnownAvailableUpdate) -> Bool {
+        openedReleases.append(update)
+        return true
     }
 }
