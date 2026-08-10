@@ -45,7 +45,7 @@ final class AudioPermissionStartupTests: XCTestCase {
         XCTAssertTrue(rig.pipelines.pipelines.isEmpty)
     }
 
-    func testAcceptedStartNeverPublishesPermissionCheckingOrVerifiedState() async throws {
+    func testAcceptedStartPublishesOnlyRealPipelineStartupStates() async throws {
         let rig = AudioCaptureTestRig()
         let controller = rig.makeController()
         var states: [AudioCaptureStateSnapshot] = []
@@ -58,10 +58,26 @@ final class AudioPermissionStartupTests: XCTestCase {
             controller.runtimeState == .active
         }
 
+        XCTAssertTrue(states.contains { $0.activity == .preparing })
+        XCTAssertEqual(states.last?.activity, .active)
+        XCTAssertTrue(states.allSatisfy {
+            switch $0.activity {
+            case .stopped, .ready, .preparing, .active:
+                true
+            case .suspended, .recovering, .recoveryFailed, .failed:
+                false
+            }
+        })
+        XCTAssertTrue(states.allSatisfy {
+            $0.systemAudioAccessState == .notRequested
+                || $0.systemAudioAccessState == .explanationRequired
+        })
+        XCTAssertTrue(states.contains {
+            $0.status == "Preparing output-route safety monitoring before Leveling starts."
+        })
         XCTAssertFalse(states.contains {
-            $0.activity == .checkingAccess
-                || $0.systemAudioAccessState == .checking
-                || $0.systemAudioAccessState == .verified
+            $0.status.localizedCaseInsensitiveContains("access is checked")
+                || $0.status.localizedCaseInsensitiveContains("checking audio access")
         })
     }
 

@@ -5,8 +5,8 @@ import VolEqMacAudio
 import XCTest
 
 final class AudioPublicAPICompatibilityTests: XCTestCase {
-    func testLegacyRuntimeStateRemainsExhaustivelySwitchable() {
-        XCTAssertEqual(legacyTitle(for: .active), "active")
+    func testV010RuntimeStateRemainsExhaustivelySwitchable() {
+        XCTAssertEqual(v010Title(for: .active), "active")
     }
 
     @available(macOS 14.2, *)
@@ -23,15 +23,13 @@ final class AudioPublicAPICompatibilityTests: XCTestCase {
         _ = compileProjectedPublishers
     }
 
-    private func legacyTitle(for state: CaptureRuntimeState) -> String {
+    private func v010Title(for state: CaptureRuntimeState) -> String {
         switch state {
         case .stopped: "stopped"
         case .ready: "ready"
         case .preparing: "preparing"
-        case .checkingAccess: "checking"
         case .active: "active"
         case .recovering: "recovering"
-        case .permissionRequired: "permission"
         case .failed: "failed"
         }
     }

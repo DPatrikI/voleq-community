@@ -54,20 +54,16 @@ public final class AudioCaptureController: ObservableObject {
 
     public func toggle() {
         switch captureState.activity {
-        case .active, .preparing, .checkingAccess, .suspended, .recovering:
+        case .active, .preparing, .suspended, .recovering:
             stop()
         case .recoveryFailed:
             retryRecovery()
-        case .stopped, .ready, .permissionRequired, .failed:
+        case .stopped, .ready, .failed:
             start()
         }
     }
 
     public func start() {
-        coordinator.start(intent: captureIntent())
-    }
-
-    public func checkAudioAccessAgain() {
         coordinator.start(intent: captureIntent())
     }
 
@@ -81,10 +77,6 @@ public final class AudioCaptureController: ObservableObject {
                 || selectedProcessID.map { selectedID in
                     processes.contains(where: { $0.id == selectedID })
                 } == true)
-    }
-
-    public func cancelAudioAccessCheck() {
-        coordinator.cancelAudioAccessCheck()
     }
 
     public func stop() {

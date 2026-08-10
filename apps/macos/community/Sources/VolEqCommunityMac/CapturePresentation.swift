@@ -56,7 +56,6 @@ struct CapturePresentation: Equatable {
         controlsLocked = !state.acceptsPrimaryAction
             || isRunning
             || runtimeState == .preparing
-            || runtimeState == .checkingAccess
             || runtimeState == .suspended
             || runtimeState == .recovering
             || cleanupRequiresQuit
@@ -66,9 +65,9 @@ struct CapturePresentation: Equatable {
         }
         let hasCaptureTarget = mode == .system || selectedProcess != nil
         switch runtimeState {
-        case .active, .preparing, .checkingAccess, .suspended, .recovering:
+        case .active, .preparing, .suspended, .recovering:
             canPerformPrimaryAction = state.acceptsPrimaryAction
-        case .recoveryFailed, .stopped, .ready, .permissionRequired, .failed:
+        case .recoveryFailed, .stopped, .ready, .failed:
             canPerformPrimaryAction = state.acceptsPrimaryAction
                 && !controlsLocked
                 && hasCaptureTarget
@@ -94,12 +93,10 @@ struct CapturePresentation: Equatable {
         case .stopped: "Stopped"
         case .ready: "Ready"
         case .preparing: "Starting"
-        case .checkingAccess: "Starting"
         case .active: "Active"
         case .suspended: "Paused for System Sleep"
         case .recovering: "Restoring Leveling"
         case .recoveryFailed: "Leveling Did Not Resume"
-        case .permissionRequired: "Stopped"
         case .failed: "Needs attention"
         }
     }
@@ -108,11 +105,11 @@ struct CapturePresentation: Equatable {
         for state: AudioCaptureActivity
     ) -> (full: String, compact: String) {
         switch state {
-        case .active, .preparing, .checkingAccess, .suspended, .recovering:
+        case .active, .preparing, .suspended, .recovering:
             ("Stop Leveling", "Stop")
         case .recoveryFailed:
             ("Try Again", "Try Again")
-        case .stopped, .ready, .permissionRequired, .failed:
+        case .stopped, .ready, .failed:
             ("Start Leveling", "Start")
         }
     }
@@ -122,8 +119,8 @@ struct CapturePresentation: Equatable {
     ) -> CaptureStatusTone {
         switch state {
         case .active: .active
-        case .preparing, .checkingAccess, .suspended, .recovering: .progressing
-        case .recoveryFailed, .permissionRequired, .failed: .attention
+        case .preparing, .suspended, .recovering: .progressing
+        case .recoveryFailed, .failed: .attention
         case .stopped, .ready: .neutral
         }
     }

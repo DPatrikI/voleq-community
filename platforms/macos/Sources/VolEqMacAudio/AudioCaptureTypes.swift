@@ -25,10 +25,8 @@ public enum CaptureRuntimeState: Equatable, Sendable {
     case stopped
     case ready
     case preparing
-    case checkingAccess
     case active
     case recovering
-    case permissionRequired
     case failed
 }
 
@@ -36,12 +34,10 @@ public enum AudioCaptureActivity: Equatable, Sendable {
     case stopped
     case ready
     case preparing
-    case checkingAccess
     case active
     case suspended
     case recovering
     case recoveryFailed
-    case permissionRequired
     case failed
 }
 
@@ -58,11 +54,9 @@ public struct AudioCaptureStateSnapshot: Equatable, Sendable {
         case .stopped: .stopped
         case .ready: .ready
         case .preparing: .preparing
-        case .checkingAccess: .checkingAccess
         case .active: .active
         case .suspended, .recovering: .recovering
         case .recoveryFailed, .failed: .failed
-        case .permissionRequired: .permissionRequired
         }
     }
 
@@ -99,10 +93,8 @@ private extension AudioCaptureActivity {
         case .stopped: self = .stopped
         case .ready: self = .ready
         case .preparing: self = .preparing
-        case .checkingAccess: self = .checkingAccess
         case .active: self = .active
         case .recovering: self = .recovering
-        case .permissionRequired: self = .permissionRequired
         case .failed: self = .failed
         }
     }
