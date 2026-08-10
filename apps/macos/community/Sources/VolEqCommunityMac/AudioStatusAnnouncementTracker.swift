@@ -36,8 +36,7 @@ struct AudioStatusAnnouncementTracker {
         switch current {
         case .suspended, .recoveryFailed, .failed:
             return state.status
-        case .stopped, .ready, .preparing, .checkingAccess, .active,
-             .recovering, .permissionRequired:
+        case .stopped, .ready, .preparing, .active, .recovering:
             return nil
         }
     }

@@ -177,10 +177,6 @@ final class AudioCaptureLifecycleCoordinator {
         scheduleRecovery(intent: reducedIntent, reason: .userRetry)
     }
 
-    func cancelAudioAccessCheck() {
-        requestStop(event: .stop)
-    }
-
     func stop() {
         requestStop(event: .stop)
     }
@@ -587,7 +583,7 @@ final class AudioCaptureLifecycleCoordinator {
         guard canBeginOperation,
               case .transition = apply(
                 event: .routeMonitoringStarted(intent),
-                status: "Preparing output-route safety monitoring before audio access is checked."
+                status: "Preparing output-route safety monitoring before Leveling starts."
               )
         else { return }
         cancelProcessRefreshWork()

@@ -13,12 +13,10 @@ final class AudioLifecyclePresentationTests: XCTestCase {
             .init(.stopped, "Stopped", "Start Leveling", "Start", .neutral, false, true, "Conference"),
             .init(.ready, "Ready", "Start Leveling", "Start", .neutral, false, true, "Conference"),
             .init(.preparing, "Starting", "Stop Leveling", "Stop", .progressing, true, true, "Conference"),
-            .init(.checkingAccess, "Starting", "Stop Leveling", "Stop", .progressing, true, true, "Conference"),
             .init(.active, "Active", "Stop Leveling", "Stop", .active, true, true, "Leveling Conference"),
             .init(.suspended, "Paused for System Sleep", "Stop Leveling", "Stop", .progressing, true, true, "Conference"),
             .init(.recovering, "Restoring Leveling", "Stop Leveling", "Stop", .progressing, true, true, "Conference"),
             .init(.recoveryFailed, "Leveling Did Not Resume", "Try Again", "Try Again", .attention, false, true, "Conference"),
-            .init(.permissionRequired, "Stopped", "Start Leveling", "Start", .attention, false, true, "Conference"),
             .init(.failed, "Needs attention", "Start Leveling", "Start", .attention, false, true, "Conference"),
         ]
 
@@ -131,8 +129,6 @@ private final class PresentationTestModel: VolEqControlSurfaceModel {
 
     func refreshProcesses() { }
     func toggle() { }
-    func checkAudioAccessAgain() { }
-    func cancelAudioAccessCheck() { }
 
     func setState(
         _ activity: AudioCaptureActivity,
@@ -149,9 +145,7 @@ private final class PresentationTestModel: VolEqControlSurfaceModel {
         for activity: AudioCaptureActivity
     ) -> SystemAudioAccessState {
         switch activity {
-        case .checkingAccess: .checking
         case .preparing, .active: .notRequested
-        case .permissionRequired: .actionRequired(.permissionNotGranted)
         case .stopped, .ready, .suspended, .recovering, .recoveryFailed,
              .failed: .notRequested
         }
