@@ -24,9 +24,12 @@ jobs:
 
       - name: Validate changed whitespace
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
           PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_REF_NAME: ${{ github.ref_name }}
+          PUSH_REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
@@ -34,6 +37,10 @@ jobs:
           elif [[ -n "$PUSH_BEFORE_SHA" && ! "$PUSH_BEFORE_SHA" =~ ^0+$ ]] \
             && git cat-file -e "${PUSH_BEFORE_SHA}^{commit}" 2>/dev/null; then
             git diff --check "$PUSH_BEFORE_SHA..HEAD"
+          elif [[ "$PUSH_REF_TYPE" == "branch" \
+            && "$PUSH_REF_NAME" != "$DEFAULT_BRANCH" ]] \
+            && git cat-file -e "origin/${DEFAULT_BRANCH}^{commit}" 2>/dev/null; then
+            git diff --check "origin/${DEFAULT_BRANCH}...HEAD"
           elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
             git diff --check HEAD^ HEAD
           else
