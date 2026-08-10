@@ -18,7 +18,7 @@ Teams, Zoom, Google Meet in Safari, built-in and wired output, AirPods Pro 2,
 Sennheiser HDB 630, regular and microphone-active Bluetooth modes, selected
 lifecycle cases, UI/accessibility states, and sessions exceeding eight hours.
 The later reproduced sleep/wake and permission-denial failures withdraw those
-specific passing claims; their Unreleased replacements remain pending physical
+specific passing claims; their 0.1.1 replacements remain pending physical
 revalidation.
 
 The exact tested scope and explicit non-claims are recorded in
@@ -47,15 +47,16 @@ separate in [VALIDATION.md](VALIDATION.md).
 - [x] Add deterministic version, parsing, networking, scheduling, persistence,
   concurrency, and presentation-state tests with no live GitHub dependency.
 - [ ] Complete owner-facing runtime validation for second-launch consent,
-  Window and Menu Bar presentation, VoiceOver, and offline behavior before the
-  separate `release/v0.1.1` work.
+  Window and Menu Bar presentation, VoiceOver, and offline behavior as part of
+  the 0.1.1 signed release-candidate gate.
 
 ## Later Community work
 
 - harden device and process lifecycle handling;
 - add deterministic audio fixtures and regression metrics;
 - continue accessibility and recovery-guidance refinement;
-- add platform adapters only when they can be maintained and tested.
+- add the planned Windows and Linux adapters only when their native routing
+  backends can be maintained and tested.
 
 ## VolEq Pro exploration
 

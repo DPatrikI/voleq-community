@@ -18,7 +18,9 @@ VolEq uses short-lived branches and pull requests. The `master` branch is protec
 3. Open a pull request into `master` and wait for the required CI checks to pass.
 4. Squash-merge the pull request and delete its source branch after the merge.
 
-Published releases are made from `master` and identified by Semantic Versioning tags such as `v0.1.0`. Tags identify release commits; they are not created for ordinary merges.
+Published releases are made from `master` and identified by Semantic Versioning
+tags such as `v0.1.1`. Tags identify release commits; they are not created for
+ordinary merges.
 
 ## Local checks
 

@@ -2,6 +2,15 @@
 
 VolEq changes the audio people hear, so a green build is necessary but not sufficient. Every audio-behavior pull request records deterministic checks here and receives listening validation before merge. Private meeting recordings are never committed.
 
+## 0.1.1 release validation status
+
+Automated release-branch checks cover the source tree, release build,
+development and distribution bundles, metadata, resources, and CPU benchmark.
+They do not establish Developer ID signing, notarization, Gatekeeper, physical
+audio behavior, rendered presentation, or VoiceOver behavior. Those checks
+remain pending for a signed release candidate built from the exact release-PR
+head.
+
 ## Product naming (0.1.1)
 
 The open-source application's installed product name is **VolEq**. Its source
@@ -13,15 +22,17 @@ download filename while containing the cleanly named application. Build and
 packaging scripts share one naming contract and remove only their corresponding
 obsolete generated `VolEq Community*.app` bundle before rebuilding.
 
-Automated evidence on 2026-08-10: the application-metadata regression confirms
-the VolEq display and bundle names alongside the unchanged identifier and
-executable; all 329 Swift tests passed; strict-concurrency production compilation
-with warnings as errors passed; distribution and development bundles passed
-model, branding, property-list, resource, and ad-hoc signature verification;
-release metadata validation and `git diff --check` passed. A notarized DMG was
-not produced on this feature branch. Owner validation remains required for the
-Finder, Dock, application-menu, System Audio Recording, update, and upgrade
-from 0.1.0 presentation before release.
+Automated release-branch evidence on 2026-08-10: `./dev doctor` passed; all 329
+Swift tests passed; strict-concurrency production compilation with warnings as
+errors passed; and the release-shaped distribution bundle passed model,
+branding, property-list, resource, ad-hoc signature, version `0.1.1` / build `2`,
+unchanged identity, and arm64-only checks. The canonical 48 kHz stereo benchmark
+used 2.667 seconds of thread CPU for 60 seconds of audio, or 4.45% of one core on
+MacBookPro18,3, within the 5% gate. Release metadata, artifact-name tests, local
+Markdown links, and `git diff --check` passed. A Developer-ID-signed and
+notarized DMG was not produced on this release branch. Owner validation remains
+required for the Finder, Dock, application-menu, System Audio Recording,
+update, VoiceOver, physical-device, sleep/wake, and upgrade-from-0.1.0 behavior.
 
 ## Automatic update checks (0.1.1)
 
@@ -52,9 +63,10 @@ dialog; and, after declining, a later isolated launch ran without a visible
 window or repeated prompt, consistent with Menu Bar presentation. This runtime
 inspection did not grant audio-capture permission, traverse the interface with
 VoiceOver itself, or produce a usable process-level network-denied launch.
-Owner validation is therefore still required for uninterrupted real audio,
-VoiceOver traversal, the Menu Bar
-popover, and the rendered offline retry flow before release work begins.
+This is retained development-bundle evidence, not signed-release evidence.
+Uninterrupted real audio, VoiceOver traversal, the Menu Bar popover, and the
+rendered offline retry flow remain pending for the signed 0.1.1 release
+candidate.
 
 ## System Audio Recording startup behavior (0.1.1)
 
@@ -75,11 +87,6 @@ API. Automated coverage establishes the following boundaries:
 | Failure safety | Pipeline construction/start failures remain non-running; partial resources follow the same retained dependent teardown, and cleanup refusal requires Quit |
 | Realtime callback | The processing heartbeat and DSP callback allocation coverage remains; no permission signal callback exists |
 
-The temporary permission-probe implementation's earlier 226-test and benchmark
-record is superseded and is not current release evidence. The combined current
-branch evidence, owner-run development-bundle result, and remaining physical
-validation boundary are recorded once in the sleep/wake section below.
-
 ## Sleep/wake and stalled-callback recovery (0.1.1)
 
 The owner later reproduced a v0.1.0 system-sleep failure: after wake VolEq still
@@ -88,8 +95,8 @@ sound until leveling was stopped and started again. This invalidates the earlier
 v0.1.0 sleep/wake passing claim. It is excluded from retained physical evidence
 below even though the original validation session exercised the case.
 
-The Unreleased implementation on `fix/sleep-wake-audio-recovery` has focused
-deterministic coverage for the replacement contract:
+The 0.1.1 implementation has focused deterministic coverage for the replacement
+contract:
 
 | Check | Evidence |
 | --- | --- |
@@ -121,9 +128,8 @@ settings. The release heartbeat disassembly is only
 `cbz`/`mov`/`ldadd`/`ret`.
 The canonical 48 kHz stereo benchmark used 2.614 seconds of
 thread CPU for 60 seconds of audio (4.36% of one core on
-MacBookPro18,3). Version/build metadata remained 0.1.0 (1), and the bundle
-identifier remained `com.patrikistvandoczy.voleq.community`. The product-name
-change affects the installed display name, not version or bundle identity.
+MacBookPro18,3). The current release metadata is 0.1.1 (2), and the bundle
+identifier remains `com.patrikistvandoczy.voleq.community`.
 
 The owner confirmed the simplified first-use permission/start flow and an
 extended unattended leveling session in the local development bundle. This is
@@ -436,7 +442,7 @@ Permission denial/recovery and sleep/wake are intentionally excluded from this
 retained v0.1.0 evidence. The owner later reproduced one denial path that muted
 original audio and one wake path that retained a stale muting graph without
 replacement sound. Signed-bundle permission and sleep/wake validation must be
-repeated against the Unreleased 0.1.1 implementation.
+repeated against the signed 0.1.1 release candidate.
 
 The longest uninterrupted session exceeded eight hours. No robotic processing,
 unintended music amplification, clicks, dropouts, or unbounded behavior were

@@ -6,8 +6,9 @@ their public interfaces as the supported platform set grows.
 
 ## [Unreleased]
 
-Intended for VolEq 0.1.1. The application and build versions remain
-unchanged until the separate release branch.
+No changes yet.
+
+## [0.1.1] - 2026-08-11
 
 ### Added
 
@@ -44,10 +45,9 @@ unchanged until the separate release branch.
 
 - Core Audio startup failures now leave the lifecycle non-running and attempt
   complete cleanup instead of reporting a failed graph as active.
-- Removed signal-based permission inference, temporary permission probes,
-  30-second access checks, retry timers, and Checking Audio Access recovery UI.
-  The real pipeline now follows the explanation directly and macOS remains the
-  authority for permission state.
+- Audio startup now follows the privacy explanation directly, stays non-running
+  until the real processing pipeline starts and callbacks progress, and leaves
+  macOS as the authority for System Audio Recording permission.
 - If Core Audio refuses to stop or destroy a processing resource,
   VolEq retains ownership, requires Quit, and does not claim that the original
   audio path was restored.
@@ -96,11 +96,10 @@ unchanged until the separate release branch.
 - The official v0.1.0 application supports Apple Silicon only.
 - v0.1.0 could report a failed muting capture path as active. Permission denial
   could therefore silence original playback while VolEq incorrectly appeared
-  active; the Unreleased lifecycle now stays non-running until the real pipeline
-  has started and callback progress is observed.
+  active; this is fixed in 0.1.1.
 - v0.1.0 could retain a stale muting Core Audio graph across system sleep while
   still appearing active. The earlier successful sleep/wake evidence is
-  withdrawn; the replacement behavior under Unreleased requires signed-bundle
+  withdrawn; 0.1.1 replaces that lifecycle, subject to its separate signed-bundle
   owner validation.
 - Processing operates on the combined captured mix rather than maintaining a
   separate level for each meeting participant.
@@ -109,5 +108,6 @@ unchanged until the separate release branch.
   the original audio.
 - Singing can be classified as speech.
 
-[Unreleased]: https://github.com/DPatrikI/voleq-community/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/DPatrikI/voleq-community/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/DPatrikI/voleq-community/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/DPatrikI/voleq-community/releases/tag/v0.1.0

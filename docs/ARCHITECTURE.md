@@ -68,7 +68,7 @@ control thread before any processing starts. The macOS adapter preflights the
 output rate before creating its muting tap, and tears down any later-created
 tap or aggregate resources if the callback rate fails the same rule. The
 original audio path remains intact. Alternating fractional-cadence support is
-not part of v0.1.0.
+not part of the current release.
 
 On Apple Silicon, the internal RNNoise adapter evaluates the two states through
 a paired float kernel covering sparse GRU and dense/conv layers. It shares

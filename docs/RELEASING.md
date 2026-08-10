@@ -49,7 +49,9 @@ and [custom notarization workflow](https://developer.apple.com/documentation/sec
 
 ## Release-candidate branch
 
-From a clean release-branch commit, run:
+After the release PR exists, check out its exact head commit, verify that local
+`HEAD` equals the PR head SHA, and record that SHA with the RC evidence. From
+that clean detached commit or clean release branch head, run:
 
 ```sh
 ./dev doctor
@@ -65,7 +67,7 @@ timestamp, notarizes and staples the app, creates and signs the DMG, notarizes
 and staples the DMG, runs Gatekeeper and integrity checks, and writes:
 
 ```text
-dist/release/VolEq-Community-0.1.0-rc1-macOS-arm64.dmg
+dist/release/VolEq-Community-0.1.1-rc1-macOS-arm64.dmg
 dist/release/SHA256SUMS.txt
 dist/release/notarization/
 ```
@@ -83,10 +85,10 @@ The project owner merges the release PR manually. After merge, synchronize
 ./dev package macos
 ```
 
-This produces `VolEq-Community-0.1.0-macOS-arm64.dmg` and a matching checksum.
+This produces `VolEq-Community-0.1.1-macOS-arm64.dmg` and a matching checksum.
 Do not reuse the release-candidate DMG because it was built from a different
 commit. After the final artifact passes installation and smoke testing, create
-an annotated `v0.1.0` tag on the verified merge commit. Push the tag only after
+an annotated `v0.1.1` tag on the verified merge commit. Push the tag only after
 explicit owner authorization and wait for its CI run before publishing the
 GitHub Release.
 
@@ -102,8 +104,10 @@ verifies the rendered notes, downloadable assets, and checksum.
   submissions retain Apple's JSON response and detailed log when a submission
   ID is available.
 - Each packaging attempt removes the previous DMG, checksum, and notarization
-  evidence before signing or building. A failed rerun therefore leaves no stale
-  publishable candidate at the documented output paths.
+  evidence before signing or building. If any later validation fails, the new
+  DMG and checksum are removed while the current notarization evidence is
+  retained for diagnosis. A failed rerun therefore leaves no publishable
+  candidate at the documented output paths.
 - Never bypass a failed signature, Gatekeeper, stapling, DMG, model-checksum, or
   notarization check.
 - Never commit signing certificates, private keys, Apple credentials,
