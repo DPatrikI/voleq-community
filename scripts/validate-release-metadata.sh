@@ -6,7 +6,7 @@ REPOSITORY_ROOT="${0:A:h:h}"
 source "$REPOSITORY_ROOT/scripts/lib/product-naming.zsh"
 
 INFO_PLIST="$REPOSITORY_ROOT/apps/macos/community/Resources/Info.plist"
-SCREENSHOT="$REPOSITORY_ROOT/docs/assets/voleq-community-window.png"
+SCREENSHOT="$REPOSITORY_ROOT/docs/assets/voleq-window.png"
 EXPECTED_VERSION="0.1.1"
 EXPECTED_BUILD="2"
 
@@ -34,7 +34,7 @@ grep -Fq "## [$VERSION]" "$REPOSITORY_ROOT/CHANGELOG.md" \
 grep -Fq "[0.1.1]: https://github.com/DPatrikI/voleq-community/compare/v0.1.0...v0.1.1" \
     "$REPOSITORY_ROOT/CHANGELOG.md" \
     || fail "CHANGELOG.md does not contain the 0.1.1 comparison link"
-grep -Fq "docs/assets/voleq-community-window.png" "$REPOSITORY_ROOT/README.md" \
+grep -Fq "docs/assets/voleq-window.png" "$REPOSITORY_ROOT/README.md" \
     || fail "README.md does not reference the release screenshot"
 grep -Fq "docs/COMPATIBILITY.md" "$REPOSITORY_ROOT/README.md" \
     || fail "README.md does not link the compatibility matrix"

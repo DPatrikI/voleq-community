@@ -6,10 +6,11 @@ VolEq changes the audio people hear, so a green build is necessary but not suffi
 
 Automated release-branch checks cover the source tree, release build,
 development and distribution bundles, metadata, resources, and CPU benchmark.
-They do not establish Developer ID signing, notarization, Gatekeeper, physical
-audio behavior, rendered presentation, or VoiceOver behavior. Those checks
-remain pending for a signed release candidate built from the exact release-PR
-head.
+Developer ID signing, notarization, stapling, Gatekeeper, and an isolated DMG
+copy flow are release-candidate gates recorded outside the repository and must
+be rerun against the exact final release-PR head. Neither those gates nor the
+automated checks establish physical audio, VoiceOver, sleep/wake, or real
+upgrade behavior.
 
 ## Product naming (0.1.1)
 
@@ -29,10 +30,9 @@ branding, property-list, resource, ad-hoc signature, version `0.1.1` / build `2`
 unchanged identity, and arm64-only checks. The canonical 48 kHz stereo benchmark
 used 2.667 seconds of thread CPU for 60 seconds of audio, or 4.45% of one core on
 MacBookPro18,3, within the 5% gate. Release metadata, artifact-name tests, local
-Markdown links, and `git diff --check` passed. A Developer-ID-signed and
-notarized DMG was not produced on this release branch. Owner validation remains
-required for the Finder, Dock, application-menu, System Audio Recording,
-update, VoiceOver, physical-device, sleep/wake, and upgrade-from-0.1.0 behavior.
+Markdown links, and `git diff --check` passed. Owner validation remains required
+for the Finder, Dock, application-menu, System Audio Recording, update,
+VoiceOver, physical-device, sleep/wake, and upgrade-from-0.1.0 behavior.
 
 ## Automatic update checks (0.1.1)
 

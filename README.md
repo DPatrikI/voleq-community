@@ -5,7 +5,7 @@ and loud speakers are less overwhelming. It runs locally on your Mac and works
 with one audio-producing application or the complete output mix.
 
 <p align="center">
-  <img src="docs/assets/voleq-community-window.png" width="560" alt="VolEq window showing stopped device-wide capture with speech-aware leveling enabled">
+  <img src="docs/assets/voleq-window.png" width="560" alt="VolEq window showing stopped device-wide capture with speech-aware leveling enabled">
 </p>
 
 ## Platform support
