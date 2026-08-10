@@ -48,7 +48,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.init(
             applicationModel: .shared,
             workspaceNotificationCenter: NSWorkspace.shared.notificationCenter,
-            audioStatusAnnouncement: Self.postAudioStatusAnnouncement,
             terminationReply: { $0.reply(toApplicationShouldTerminate: $1) }
         )
     }
