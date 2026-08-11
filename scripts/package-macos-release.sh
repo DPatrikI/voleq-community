@@ -79,13 +79,13 @@ WORK_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/voleq-release.XXXXXX")"
 PACKAGE_SUCCEEDED=false
 cleanup() {
     local exit_status=$?
-    rm -rf "$WORK_DIRECTORY"
-    if ! voleq_cleanup_publishable_release_outputs_after_attempt \
+    if ! voleq_cleanup_release_attempt \
         "$RELEASE_DIRECTORY" \
         "$DMG" \
         "$CHECKSUMS" \
-        "$PACKAGE_SUCCEEDED"; then
-        print -u2 -- "warning: could not remove failed publishable release outputs"
+        "$PACKAGE_SUCCEEDED" \
+        "$WORK_DIRECTORY"; then
+        print -u2 -- "warning: release cleanup was incomplete"
     fi
     return "$exit_status"
 }

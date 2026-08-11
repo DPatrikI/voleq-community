@@ -66,6 +66,31 @@ voleq_cleanup_publishable_release_outputs_after_attempt() {
     esac
 }
 
+voleq_cleanup_release_attempt() {
+    local release_directory="$1"
+    local dmg="$2"
+    local checksums="$3"
+    local succeeded="$4"
+    local work_directory="$5"
+    local cleanup_failed=false
+
+    if ! voleq_cleanup_publishable_release_outputs_after_attempt \
+        "$release_directory" \
+        "$dmg" \
+        "$checksums" \
+        "$succeeded"; then
+        print -u2 -- "warning: could not remove failed publishable release outputs"
+        cleanup_failed=true
+    fi
+
+    if ! rm -rf -- "$work_directory"; then
+        print -u2 -- "warning: could not remove release workspace: $work_directory"
+        cleanup_failed=true
+    fi
+
+    [[ "$cleanup_failed" == false ]]
+}
+
 voleq_invalidate_release_outputs() {
     local release_directory="${1:A}"
     local dmg="${2:A}"

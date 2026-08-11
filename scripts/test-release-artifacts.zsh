@@ -115,6 +115,32 @@ voleq_cleanup_publishable_release_outputs_after_attempt \
     || { print -u2 -- "not ok - current notarization evidence was removed"; exit 1; }
 pass "removes failed publishable outputs while preserving notarization evidence"
 
+print -r -- "failed candidate" > "$DMG"
+print -r -- "failed checksum" > "$CHECKSUMS"
+BLOCKED_WORKSPACE_PARENT="$TEMPORARY_ROOT/locked-workspace-parent"
+BLOCKED_WORKSPACE="$BLOCKED_WORKSPACE_PARENT/workspace"
+mkdir -p "$BLOCKED_WORKSPACE"
+chmod 500 "$BLOCKED_WORKSPACE_PARENT"
+
+if voleq_cleanup_release_attempt \
+    "$RELEASE_DIRECTORY" \
+    "$DMG" \
+    "$CHECKSUMS" \
+    false \
+    "$BLOCKED_WORKSPACE" >/dev/null 2>&1; then
+    chmod 700 "$BLOCKED_WORKSPACE_PARENT"
+    print -u2 -- "not ok - accepted a release cleanup with an undeletable workspace"
+    exit 1
+fi
+chmod 700 "$BLOCKED_WORKSPACE_PARENT"
+[[ ! -e "$DMG" ]] \
+    || { print -u2 -- "not ok - workspace failure left a candidate DMG"; exit 1; }
+[[ ! -e "$CHECKSUMS" ]] \
+    || { print -u2 -- "not ok - workspace failure left a candidate checksum"; exit 1; }
+[[ -d "$BLOCKED_WORKSPACE" ]] \
+    || { print -u2 -- "not ok - workspace failure fixture was removed"; exit 1; }
+pass "removes failed publishable outputs before workspace cleanup"
+
 print -r -- "accepted candidate" > "$DMG"
 print -r -- "accepted checksum" > "$CHECKSUMS"
 voleq_cleanup_publishable_release_outputs_after_attempt \
