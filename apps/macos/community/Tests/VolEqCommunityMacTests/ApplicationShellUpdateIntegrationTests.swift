@@ -46,6 +46,25 @@ final class ApplicationShellUpdateIntegrationTests: XCTestCase {
         XCTAssertEqual(quitCount, 1)
     }
 
+    func testDiagnosticExportAndClearActionsRemainBehaviorallyReachable() {
+        let updates = RecordingApplicationUpdateCommands()
+        var exportCount = 0
+        var clearCount = 0
+        let actions = ApplicationShellActions(
+            updates: updates,
+            openSettings: {},
+            quit: {},
+            exportDiagnostics: { exportCount += 1 },
+            clearDiagnostics: { clearCount += 1 }
+        )
+
+        actions.exportDiagnostics()
+        actions.clearDiagnostics()
+
+        XCTAssertEqual(exportCount, 1)
+        XCTAssertEqual(clearCount, 1)
+    }
+
 }
 
 @MainActor

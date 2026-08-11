@@ -24,7 +24,9 @@ final class AudioCaptureDiagnosticsMonitor {
                       isCurrent(pipeline),
                       !Task.isCancelled
                 else { return }
+                pipeline.drainDiagnosticTelemetry()
                 if let failure = processor.takePendingFailure() {
+                    pipeline.recordDiagnosticProcessingFailure(failure)
                     onFailure(failure)
                     return
                 }

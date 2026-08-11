@@ -16,15 +16,21 @@ struct ApplicationShellActions {
     private let updates: any ApplicationUpdateCommandHandling
     private let openSettingsAction: () -> Void
     private let quitAction: () -> Void
+    private let exportDiagnosticsAction: () -> Void
+    private let clearDiagnosticsAction: () -> Void
 
     init(
         updates: any ApplicationUpdateCommandHandling,
         openSettings: @escaping () -> Void,
-        quit: @escaping () -> Void
+        quit: @escaping () -> Void,
+        exportDiagnostics: @escaping () -> Void = {},
+        clearDiagnostics: @escaping () -> Void = {}
     ) {
         self.updates = updates
         openSettingsAction = openSettings
         quitAction = quit
+        exportDiagnosticsAction = exportDiagnostics
+        clearDiagnosticsAction = clearDiagnostics
     }
 
     func checkForUpdates() async {
@@ -42,5 +48,13 @@ struct ApplicationShellActions {
 
     func quit() {
         quitAction()
+    }
+
+    func exportDiagnostics() {
+        exportDiagnosticsAction()
+    }
+
+    func clearDiagnostics() {
+        clearDiagnosticsAction()
     }
 }

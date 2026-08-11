@@ -11,6 +11,9 @@ typeset -gr VOLEQ_EXECUTABLE_NAME="VolEqCommunityMac"
 typeset -gr VOLEQ_RELEASE_BUNDLE_IDENTIFIER="com.patrikistvandoczy.voleq.community"
 typeset -gr VOLEQ_DEVELOPMENT_BUNDLE_IDENTIFIER="${VOLEQ_RELEASE_BUNDLE_IDENTIFIER}.development"
 typeset -gr VOLEQ_COMMUNITY_ARTIFACT_PREFIX="VolEq-Community"
+typeset -gr VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_PRODUCT_NAME="VolEq Audio Liveness Diagnostic"
+typeset -gr VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_APP_BUNDLE="VolEq Audio Liveness Diagnostic.app"
+typeset -gr VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_BUNDLE_IDENTIFIER="${VOLEQ_RELEASE_BUNDLE_IDENTIFIER}.diagnostics.audio-liveness"
 
 voleq_validate_product_plist() {
     local info_plist="$1"
@@ -25,6 +28,10 @@ voleq_validate_product_plist() {
         development)
             expected_name="$VOLEQ_DEVELOPMENT_PRODUCT_NAME"
             expected_identifier="$VOLEQ_DEVELOPMENT_BUNDLE_IDENTIFIER"
+            ;;
+        audio-liveness-diagnostic)
+            expected_name="$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_PRODUCT_NAME"
+            expected_identifier="$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_BUNDLE_IDENTIFIER"
             ;;
         *)
             print -u2 -- "error: unknown product variant: $variant"

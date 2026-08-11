@@ -30,14 +30,17 @@ struct AudioCaptureDependencies {
     @available(macOS 14.2, *)
     @MainActor
     static func live(
-        permissionExplanationRequest: @escaping @MainActor () async -> Bool
+        permissionExplanationRequest: @escaping @MainActor () async -> Bool,
+        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil
     ) -> AudioCaptureDependencies {
         let clock = ContinuousAudioLifecycleClock()
         let scheduler = ContinuousAudioLifecycleScheduler()
         return AudioCaptureDependencies(
             processCatalog: CoreAudioProcessCatalog(),
             preflight: CoreAudioCapturePreflight(),
-            pipelineBuilder: CoreAudioCapturePipelineBuilder(),
+            pipelineBuilder: CoreAudioCapturePipelineBuilder(
+                diagnostics: diagnostics
+            ),
             routeMonitor: CoreAudioOutputRouteMonitor(),
             routeStabilityGate: AudioOutputRouteStabilityGate(
                 observer: CoreAudioOutputRouteObserver(),

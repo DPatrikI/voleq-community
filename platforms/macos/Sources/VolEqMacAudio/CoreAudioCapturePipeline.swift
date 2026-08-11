@@ -11,6 +11,13 @@ protocol AudioCapturePipeline: AnyObject, Sendable {
     func start() throws -> UInt64
     func stop() -> AudioCaptureTeardownReport
     func updateSettings(_ settings: LevelingSettings)
+    func drainDiagnosticTelemetry()
+    func recordDiagnosticProcessingFailure(_ statusCode: OSStatus)
+}
+
+extension AudioCapturePipeline {
+    func drainDiagnosticTelemetry() {}
+    func recordDiagnosticProcessingFailure(_ statusCode: OSStatus) {}
 }
 
 protocol AudioCapturePipelineBuilding: Sendable {
@@ -87,9 +94,14 @@ struct CoreAudioCapturePipelineOperations: @unchecked Sendable {
 @available(macOS 14.2, *)
 struct CoreAudioCapturePipelineBuilder: AudioCapturePipelineBuilding {
     let operations: CoreAudioCapturePipelineOperations
+    let diagnostics: (any AudioLivenessDiagnosticsRecording)?
 
-    init(operations: CoreAudioCapturePipelineOperations = .live) {
+    init(
+        operations: CoreAudioCapturePipelineOperations = .live,
+        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil
+    ) {
         self.operations = operations
+        self.diagnostics = diagnostics
     }
 
     func build(
@@ -99,6 +111,7 @@ struct CoreAudioCapturePipelineBuilder: AudioCapturePipelineBuilding {
         try CoreAudioCapturePipeline.build(
             request: request,
             operations: operations,
+            diagnostics: diagnostics,
             onRouteChange: onRouteChange
         )
     }
@@ -121,7 +134,10 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     )
     private let lifecycleLock = NSLock()
     private let resources: CoreAudioCaptureResourceOwner
+    private let diagnostics: (any AudioLivenessDiagnosticsRecording)?
+    private let callbackTelemetry: AudioCallbackTelemetry?
     private var storedProcessor: AudioIOProcessor?
+    private var outputControlDiagnostics: AudioOutputControlDiagnosticsObserver?
     let heartbeat: AudioCallbackHeartbeat
 
     var processor: AudioIOProcessor? {
@@ -130,10 +146,15 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
 
     private init(
         operations: CoreAudioCapturePipelineOperations,
-        heartbeat: AudioCallbackHeartbeat
-    ) {
+        heartbeat: AudioCallbackHeartbeat,
+        diagnostics: (any AudioLivenessDiagnosticsRecording)?
+    ) throws {
         self.operations = operations
         self.heartbeat = heartbeat
+        self.diagnostics = diagnostics
+        callbackTelemetry = try diagnostics.map { _ in
+            try AudioCallbackTelemetry()
+        }
         resources = CoreAudioCaptureResourceOwner(
             operations: operations,
             routeQueue: routeQueue
@@ -143,11 +164,13 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     static func build(
         request: PreparedCaptureRequest,
         operations: CoreAudioCapturePipelineOperations,
+        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil,
         onRouteChange: @escaping @MainActor @Sendable () -> Void
     ) throws -> CoreAudioCapturePipeline {
-        let pipeline = CoreAudioCapturePipeline(
+        let pipeline = try CoreAudioCapturePipeline(
             operations: operations,
-            heartbeat: try AudioCallbackHeartbeat()
+            heartbeat: try AudioCallbackHeartbeat(),
+            diagnostics: diagnostics
         )
         do {
             try pipeline.prepare(request: request, onRouteChange: onRouteChange)
@@ -192,6 +215,24 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
             deviceID: outputDeviceID,
             onRouteChange: onRouteChange
         )
+        let bufferFrameSize: UInt32? = try? readValue(
+            objectID: outputDeviceID,
+            selector: kAudioDevicePropertyBufferFrameSize
+        )
+        diagnostics?.recordRoute(
+            uid: outputUID,
+            sampleRate: outputFormat.mSampleRate,
+            channelCount: outputFormat.mChannelsPerFrame,
+            bufferFrameSize: bufferFrameSize
+        )
+        if let diagnostics {
+            let observer = AudioOutputControlDiagnosticsObserver(
+                deviceID: outputDeviceID,
+                diagnostics: diagnostics
+            )
+            observer.start()
+            outputControlDiagnostics = observer
+        }
 
         let tapDescription = CATapDescription()
         tapDescription.name = "VolEq Capture"
@@ -292,14 +333,37 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
                 &ioProcID,
                 aggregateDeviceID,
                 ioQueue
-            ) { [heartbeat] _, inputData, inputTime, outputData, outputTime in
+            ) { [heartbeat, callbackTelemetry] _, inputData, inputTime, outputData, outputTime in
                 heartbeat.recordCallback()
-                processor.process(
-                    input: inputData,
-                    inputTime: inputTime.pointee,
-                    output: outputData,
-                    outputTime: outputTime.pointee
-                )
+                if let callbackTelemetry {
+                    let metadata = processor.processWithDiagnostics(
+                        input: inputData,
+                        inputTime: inputTime.pointee,
+                        output: outputData,
+                        outputTime: outputTime.pointee
+                    )
+                    let outputTimestamp = outputTime.pointee
+                    let inputTimestamp = inputTime.pointee
+                    let hostTime: UInt64
+                    if outputTimestamp.mFlags.contains(.hostTimeValid) {
+                        hostTime = outputTimestamp.mHostTime
+                    } else if inputTimestamp.mFlags.contains(.hostTimeValid) {
+                        hostTime = inputTimestamp.mHostTime
+                    } else {
+                        hostTime = 0
+                    }
+                    callbackTelemetry.record(
+                        hostTime: hostTime,
+                        metadata: metadata
+                    )
+                } else {
+                    processor.process(
+                        input: inputData,
+                        inputTime: inputTime.pointee,
+                        output: outputData,
+                        outputTime: outputTime.pointee
+                    )
+                }
             },
             "Create audio processing callback"
         )
@@ -323,6 +387,19 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         }
     }
 
+    func drainDiagnosticTelemetry() {
+        guard let callbackTelemetry, let diagnostics else { return }
+        let drained = callbackTelemetry.drain()
+        diagnostics.ingest(
+            drained.records,
+            droppedRecordCount: drained.droppedRecordCount
+        )
+    }
+
+    func recordDiagnosticProcessingFailure(_ statusCode: OSStatus) {
+        diagnostics?.recordProcessingFailure(statusCode)
+    }
+
     var runningStatusSuffix: String {
         lifecycleLock.withLock {
             guard let processor = storedProcessor,
@@ -333,7 +410,10 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     }
 
     func stop() -> AudioCaptureTeardownReport {
-        resources.teardown()
+        drainDiagnosticTelemetry()
+        outputControlDiagnostics?.stop()
+        outputControlDiagnostics = nil
+        return resources.teardown()
     }
 
     private func installOutputListeners(
@@ -341,7 +421,9 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         onRouteChange: @escaping @MainActor @Sendable () -> Void
     ) throws {
         let ingress = AudioRouteChangeSignalCoalescer(deliver: onRouteChange)
+        let diagnostics = diagnostics
         let listener: AudioObjectPropertyListenerBlock = { _, _ in
+            diagnostics?.recordRouteChangeDetected()
             ingress.signal()
         }
         let addresses = [
@@ -368,6 +450,7 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     }
 
     deinit {
+        outputControlDiagnostics?.stop()
         let resources = resources
         Self.abandonedCleanupQueue.async {
             let report = resources.teardown()

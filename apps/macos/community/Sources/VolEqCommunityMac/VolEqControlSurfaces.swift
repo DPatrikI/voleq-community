@@ -26,6 +26,10 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
                     }
                 }
 
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+                DiagnosticBanner(actions: actions, compact: false)
+#endif
+
                 Divider()
 
                 RuntimeStatusView(model: model, compact: false)
@@ -35,6 +39,7 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
                     actions: actions
                 )
 
+#if !VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
                 UpdateAvailableIndicator(
                     updates: updates,
                     actions: actions,
@@ -52,6 +57,7 @@ struct UtilityWindowView<Model: VolEqControlSurfaceModel>: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Checking for updates")
                 }
+#endif
 
                 Divider()
 
@@ -92,8 +98,12 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("VolEq")
+                Text(productName)
                     .font(.title2.weight(.semibold))
+
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+                DiagnosticBanner(actions: actions, compact: true)
+#endif
 
                 HStack(alignment: .center, spacing: 12) {
                     RuntimeStatusView(model: model, compact: true)
@@ -115,6 +125,7 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
 
                 CaptureControls(model: model, compact: true)
 
+#if !VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
                 UpdateAvailableIndicator(
                     updates: updates,
                     actions: actions,
@@ -139,6 +150,7 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
 
                     Spacer()
                 }
+#endif
 
                 HStack {
                     NoSoundButton(systemAudioAccess: systemAudioAccess)
@@ -177,7 +189,54 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
         // overflow remains reachable through vertical scrolling.
         .frame(width: 360, height: 560)
     }
+
+    private var productName: String {
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+        "VolEq Audio Liveness Diagnostic"
+#else
+        "VolEq"
+#endif
+    }
 }
+
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+@available(macOS 14.2, *)
+private struct DiagnosticBanner: View {
+    let actions: ApplicationShellActions
+    let compact: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(
+                "Private audio-liveness diagnostic — not a release candidate",
+                systemImage: "waveform.badge.magnifyingglass"
+            )
+            .font(compact ? .callout.weight(.semibold) : .headline)
+
+            Text("Stores bounded callback and route metadata only. It never records audio samples and never restarts Leveling because of silence.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Export Diagnostic Report…") {
+                    actions.exportDiagnostics()
+                }
+                .accessibilityIdentifier("voleq.export-diagnostics")
+
+                Button("Clear Diagnostic Data…") {
+                    actions.clearDiagnostics()
+                }
+                .accessibilityIdentifier("voleq.clear-diagnostics")
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(compact ? 10 : 12)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+    }
+}
+#endif
 
 @available(macOS 14.2, *)
 private struct CapturePrimaryActionButton<Model: VolEqControlSurfaceModel>: View {

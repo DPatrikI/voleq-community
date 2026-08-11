@@ -14,6 +14,7 @@ usage() {
     echo "  ./dev doctor"
     echo "  ./dev test"
     echo "  ./dev build macos"
+    echo "  ./dev build audio-liveness-diagnostic"
     echo "  ./dev run macos"
     echo "  ./dev package macos"
     echo "  ./dev benchmark mild-noise-suppression"
@@ -42,8 +43,12 @@ case "$COMMAND" in
             "$VOLEQ_SWIFT_BINARY" test
         ;;
     build)
-        require_macos
-        "$REPOSITORY_ROOT/scripts/build-macos-app.sh"
+        if [[ "$PLATFORM" == "audio-liveness-diagnostic" ]]; then
+            "$REPOSITORY_ROOT/scripts/build-macos-audio-liveness-diagnostic.sh"
+        else
+            require_macos
+            "$REPOSITORY_ROOT/scripts/build-macos-app.sh"
+        fi
         ;;
     run)
         require_macos

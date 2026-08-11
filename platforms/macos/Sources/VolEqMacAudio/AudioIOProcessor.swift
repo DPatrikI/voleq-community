@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import AudioToolbox
+import CVolEqRealtime
 import Foundation
 import VolEqCore
 import VolEqDSP
@@ -8,6 +9,22 @@ import VolEqSpeech
 
 private let callbackTimingUnavailable = OSStatus(bitPattern: 0x5643_544D) // 'VCTM'
 let speechAnalysisFailed = OSStatus(bitPattern: 0x5653_5048) // 'VSPH'
+
+struct AudioIOCallbackMetadata {
+    let inputFrameCount: Int
+    let outputFrameCount: Int
+    let capturedPeak: Float
+    let flags: UInt32
+    let path: UInt32
+    let outcome: UInt32
+    let status: Int32
+}
+
+private struct CapturedInputStatistics {
+    let peak: Float
+    let hasSamples: Bool
+    let containsNonfiniteSample: Bool
+}
 
 /// Owns the direct and converted processing paths for one active audio route.
 ///
@@ -26,10 +43,7 @@ final class AudioIOProcessor {
     private let directContentAnalyzer: (any AudioContentAnalyzing)?
     private let conversionContentAnalyzer: (any AudioContentAnalyzing)?
     private let sampleRateConverter: BufferedSampleRateConverter?
-    private let diagnosticsLock = NSLock()
-    private let failureLock = NSLock()
-    private var sharedDiagnostics: AudioIOProcessingDiagnostics?
-    private var pendingFailureStatus: OSStatus?
+    private let realtimePublication: OpaquePointer
     private var cadenceAnalyzer: AudioCallbackCadenceAnalyzer?
     private var selectedPath: AudioSampleRatePath?
     /// Written only by the serial audio callback; avoids a lock attempt per period.
@@ -168,6 +182,17 @@ final class AudioIOProcessor {
             usesSampleRateConversion = false
             selectedPath = .directAggregateClock
         }
+        guard let realtimePublication =
+            voleq_realtime_processor_publication_create() else {
+            throw VolEqError.missingValue(
+                "VolEq could not allocate its real-time processor state."
+            )
+        }
+        self.realtimePublication = realtimePublication
+    }
+
+    deinit {
+        voleq_realtime_processor_publication_destroy(realtimePublication)
     }
 
     func updateSettings(_ settings: LevelingSettings) {
@@ -176,18 +201,34 @@ final class AudioIOProcessor {
     }
 
     func currentDiagnostics() -> AudioIOProcessingDiagnostics? {
-        diagnosticsLock.lock()
-        defer { diagnosticsLock.unlock() }
-        return sharedDiagnostics
+        var path: UInt32 = 0
+        var inputFrameCount: UInt32 = 0
+        var outputFrameCount: UInt32 = 0
+        guard voleq_realtime_processor_read_diagnostics(
+            realtimePublication,
+            &path,
+            &inputFrameCount,
+            &outputFrameCount
+        ) else { return nil }
+        let resolvedPath: AudioSampleRatePath
+        switch path {
+        case 1: resolvedPath = .directAggregateClock
+        case 2: resolvedPath = .sampleRateConverter
+        default: return nil
+        }
+        return AudioIOProcessingDiagnostics(
+            path: resolvedPath,
+            inputFrameCount: Int(inputFrameCount),
+            outputFrameCount: Int(outputFrameCount)
+        )
     }
 
     /// Called by a control-thread monitor. Never call this from the audio callback.
     func takePendingFailure() -> OSStatus? {
-        failureLock.lock()
-        defer { failureLock.unlock() }
-        let failure = pendingFailureStatus
-        pendingFailureStatus = nil
-        return failure
+        let failure = voleq_realtime_processor_take_failure(
+            realtimePublication
+        )
+        return failure == noErr ? nil : failure
     }
 
 #if DEBUG
@@ -200,13 +241,6 @@ final class AudioIOProcessor {
         }
     }
 
-    func _testOnlyWithFailureLockHeld<Result>(
-        _ body: () throws -> Result
-    ) rethrows -> Result {
-        failureLock.lock()
-        defer { failureLock.unlock() }
-        return try body()
-    }
 #endif
 
     func process(
@@ -215,12 +249,74 @@ final class AudioIOProcessor {
         output: UnsafeMutablePointer<AudioBufferList>,
         outputTime: AudioTimeStamp? = nil
     ) {
+        _ = process(
+            input: input,
+            inputTime: inputTime,
+            output: output,
+            outputTime: outputTime,
+            collectInputStatistics: false
+        )
+    }
+
+    func processWithDiagnostics(
+        input: UnsafePointer<AudioBufferList>,
+        inputTime: AudioTimeStamp? = nil,
+        output: UnsafeMutablePointer<AudioBufferList>,
+        outputTime: AudioTimeStamp? = nil
+    ) -> AudioIOCallbackMetadata {
+        process(
+            input: input,
+            inputTime: inputTime,
+            output: output,
+            outputTime: outputTime,
+            collectInputStatistics: true
+        )
+    }
+
+    private func process(
+        input: UnsafePointer<AudioBufferList>,
+        inputTime: AudioTimeStamp?,
+        output: UnsafeMutablePointer<AudioBufferList>,
+        outputTime: AudioTimeStamp?,
+        collectInputStatistics: Bool
+    ) -> AudioIOCallbackMetadata {
         let inputFrameCount = Self.minimumAvailableFrameCount(in: input)
         let outputFrameCount = Self.minimumAvailableFrameCount(in: output)
-        guard outputFrameCount > 0 else { return }
+        let inputStatistics: CapturedInputStatistics
+        if collectInputStatistics {
+            inputStatistics = Self.capturedInputStatistics(
+                in: input,
+                frameCount: inputFrameCount
+            )
+        } else {
+            inputStatistics = CapturedInputStatistics(
+                peak: 0,
+                hasSamples: false,
+                containsNonfiniteSample: false
+            )
+        }
+        guard outputFrameCount > 0 else {
+            return callbackMetadata(
+                inputFrameCount: inputFrameCount,
+                outputFrameCount: outputFrameCount,
+                inputStatistics: inputStatistics,
+                path: selectedPath,
+                outcome: 1,
+                status: noErr,
+                collected: collectInputStatistics
+            )
+        }
         guard inputFrameCount > 0 else {
             Self.clear(output: output)
-            return
+            return callbackMetadata(
+                inputFrameCount: inputFrameCount,
+                outputFrameCount: outputFrameCount,
+                inputStatistics: inputStatistics,
+                path: selectedPath,
+                outcome: 2,
+                status: noErr,
+                collected: collectInputStatistics
+            )
         }
         guard let sampleRateConverter else {
             directContentAnalyzer?.append(
@@ -235,9 +331,25 @@ final class AudioIOProcessor {
             guard directDynamics.process(input: input, output: output) else {
                 Self.clear(output: output)
                 reportConversionFailureIfNeeded(speechAnalysisFailed)
-                return
+                return callbackMetadata(
+                    inputFrameCount: inputFrameCount,
+                    outputFrameCount: outputFrameCount,
+                    inputStatistics: inputStatistics,
+                    path: .directAggregateClock,
+                    outcome: 5,
+                    status: speechAnalysisFailed,
+                    collected: collectInputStatistics
+                )
             }
-            return
+            return callbackMetadata(
+                inputFrameCount: inputFrameCount,
+                outputFrameCount: outputFrameCount,
+                inputStatistics: inputStatistics,
+                path: .directAggregateClock,
+                outcome: 4,
+                status: noErr,
+                collected: collectInputStatistics
+            )
         }
 
         let path: AudioSampleRatePath
@@ -247,7 +359,15 @@ final class AudioIOProcessor {
             guard var cadenceAnalyzer else {
                 Self.clear(output: output)
                 reportConversionFailureIfNeeded(callbackTimingUnavailable)
-                return
+                return callbackMetadata(
+                    inputFrameCount: inputFrameCount,
+                    outputFrameCount: outputFrameCount,
+                    inputStatistics: inputStatistics,
+                    path: nil,
+                    outcome: 5,
+                    status: callbackTimingUnavailable,
+                    collected: collectInputStatistics
+                )
             }
             let resolution = cadenceAnalyzer.observe(
                 inputFrameCount: inputFrameCount,
@@ -259,14 +379,30 @@ final class AudioIOProcessor {
             switch resolution {
             case .pending:
                 Self.clear(output: output)
-                return
+                return callbackMetadata(
+                    inputFrameCount: inputFrameCount,
+                    outputFrameCount: outputFrameCount,
+                    inputStatistics: inputStatistics,
+                    path: nil,
+                    outcome: 3,
+                    status: noErr,
+                    collected: collectInputStatistics
+                )
             case let .resolved(resolvedPath):
                 selectedPath = resolvedPath
                 path = resolvedPath
             case .failed:
                 Self.clear(output: output)
                 reportConversionFailureIfNeeded(callbackTimingUnavailable)
-                return
+                return callbackMetadata(
+                    inputFrameCount: inputFrameCount,
+                    outputFrameCount: outputFrameCount,
+                    inputStatistics: inputStatistics,
+                    path: nil,
+                    outcome: 5,
+                    status: callbackTimingUnavailable,
+                    collected: collectInputStatistics
+                )
             }
         }
         recordDiagnosticsIfNeeded(
@@ -283,9 +419,25 @@ final class AudioIOProcessor {
             guard directDynamics.process(input: input, output: output) else {
                 Self.clear(output: output)
                 reportConversionFailureIfNeeded(speechAnalysisFailed)
-                return
+                return callbackMetadata(
+                    inputFrameCount: inputFrameCount,
+                    outputFrameCount: outputFrameCount,
+                    inputStatistics: inputStatistics,
+                    path: path,
+                    outcome: 5,
+                    status: speechAnalysisFailed,
+                    collected: collectInputStatistics
+                )
             }
-            return
+            return callbackMetadata(
+                inputFrameCount: inputFrameCount,
+                outputFrameCount: outputFrameCount,
+                inputStatistics: inputStatistics,
+                path: path,
+                outcome: 4,
+                status: noErr,
+                collected: collectInputStatistics
+            )
         }
 
         conversionContentAnalyzer?.append(
@@ -295,19 +447,108 @@ final class AudioIOProcessor {
         guard sampleRateConverter.appendProcessedInput(input, processor: conversionDynamics) else {
             Self.clear(output: output)
             reportConversionFailureIfNeeded(speechAnalysisFailed)
-            return
+            return callbackMetadata(
+                inputFrameCount: inputFrameCount,
+                outputFrameCount: outputFrameCount,
+                inputStatistics: inputStatistics,
+                path: path,
+                outcome: 5,
+                status: speechAnalysisFailed,
+                collected: collectInputStatistics
+            )
         }
         let result = sampleRateConverter.fillOutput(output)
         if let errorStatus = result.errorStatus {
             reportConversionFailureIfNeeded(errorStatus)
         }
+        return callbackMetadata(
+            inputFrameCount: inputFrameCount,
+            outputFrameCount: outputFrameCount,
+            inputStatistics: inputStatistics,
+            path: path,
+            outcome: result.errorStatus == nil ? 4 : 5,
+            status: result.errorStatus ?? noErr,
+            collected: collectInputStatistics
+        )
+    }
+
+    private func callbackMetadata(
+        inputFrameCount: Int,
+        outputFrameCount: Int,
+        inputStatistics: CapturedInputStatistics,
+        path: AudioSampleRatePath?,
+        outcome: UInt32,
+        status: OSStatus,
+        collected: Bool
+    ) -> AudioIOCallbackMetadata {
+        var flags: UInt32 = 0
+        if outputFrameCount > 0 {
+            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_OUTPUT_REQUEST_ACTIVE)
+        }
+        if inputFrameCount == 0 {
+            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_NO_CAPTURED_FRAMES)
+        }
+        if collected,
+           inputStatistics.hasSamples,
+           !inputStatistics.containsNonfiniteSample,
+           inputStatistics.peak == 0 {
+            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_ALL_ZERO)
+        }
+        if inputStatistics.containsNonfiniteSample {
+            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_NONFINITE_INPUT)
+        }
+        if inputFrameCount > 0,
+           Self.isPartialDelivery(
+               inputFrameCount: inputFrameCount,
+               outputFrameCount: outputFrameCount,
+               inputSampleRate: inputSampleRate,
+               outputSampleRate: outputSampleRate,
+               path: path
+           ) {
+            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_PARTIAL_DELIVERY)
+        }
+        let pathValue: UInt32
+        switch path {
+        case .directAggregateClock: pathValue = 1
+        case .sampleRateConverter: pathValue = 2
+        case nil: pathValue = 0
+        }
+        return AudioIOCallbackMetadata(
+            inputFrameCount: inputFrameCount,
+            outputFrameCount: outputFrameCount,
+            capturedPeak: inputStatistics.peak,
+            flags: flags,
+            path: pathValue,
+            outcome: outcome,
+            status: status
+        )
+    }
+
+    private static func isPartialDelivery(
+        inputFrameCount: Int,
+        outputFrameCount: Int,
+        inputSampleRate: Double,
+        outputSampleRate: Double,
+        path: AudioSampleRatePath?
+    ) -> Bool {
+        guard outputFrameCount > 0 else { return false }
+        let expectedInputFrameCount: Int
+        if path != .directAggregateClock,
+           inputSampleRate.isFinite,
+           outputSampleRate.isFinite,
+           outputSampleRate > 0 {
+            expectedInputFrameCount = Int(ceil(
+                Double(outputFrameCount) * inputSampleRate / outputSampleRate
+            ))
+        } else {
+            expectedInputFrameCount = outputFrameCount
+        }
+        return inputFrameCount + 1 < expectedInputFrameCount
     }
 
     private func reportConversionFailureIfNeeded(_ status: OSStatus) {
-        guard !publishedFailure, failureLock.try() else { return }
-        defer { failureLock.unlock() }
-        guard pendingFailureStatus == nil else { return }
-        pendingFailureStatus = status
+        guard !publishedFailure else { return }
+        voleq_realtime_processor_publish_failure(realtimePublication, status)
         publishedFailure = true
     }
 
@@ -316,15 +557,14 @@ final class AudioIOProcessor {
         inputFrameCount: Int,
         outputFrameCount: Int
     ) {
-        guard !diagnosticsRecorded, diagnosticsLock.try() else { return }
-        defer { diagnosticsLock.unlock() }
-        guard sharedDiagnostics == nil else { return }
-        sharedDiagnostics = AudioIOProcessingDiagnostics(
-            path: path,
-            inputFrameCount: inputFrameCount,
-            outputFrameCount: outputFrameCount
+        guard !diagnosticsRecorded else { return }
+        let pathValue: UInt32 = path == .directAggregateClock ? 1 : 2
+        diagnosticsRecorded = voleq_realtime_processor_publish_diagnostics(
+            realtimePublication,
+            pathValue,
+            UInt32(clamping: inputFrameCount),
+            UInt32(clamping: outputFrameCount)
         )
-        diagnosticsRecorded = true
     }
 
     private static func minimumAvailableFrameCount(
@@ -342,6 +582,44 @@ final class AudioIOProcessor {
             )
         }
         return accumulator.value
+    }
+
+    private static func capturedInputStatistics(
+        in list: UnsafePointer<AudioBufferList>,
+        frameCount: Int
+    ) -> CapturedInputStatistics {
+        guard frameCount > 0 else {
+            return CapturedInputStatistics(
+                peak: 0,
+                hasSamples: false,
+                containsNonfiniteSample: false
+            )
+        }
+        let buffers = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: list)
+        )
+        var peak: Float = 0
+        var hasSamples = false
+        var containsNonfiniteSample = false
+        for buffer in buffers {
+            guard let data = buffer.mData else { continue }
+            let sampleCount = frameCount * Int(buffer.mNumberChannels)
+            let samples = data.assumingMemoryBound(to: Float.self)
+            for index in 0..<sampleCount {
+                let sample = samples[index]
+                guard sample.isFinite else {
+                    containsNonfiniteSample = true
+                    continue
+                }
+                hasSamples = true
+                peak = max(peak, abs(sample))
+            }
+        }
+        return CapturedInputStatistics(
+            peak: peak,
+            hasSamples: hasSamples,
+            containsNonfiniteSample: containsNonfiniteSample
+        )
     }
 
     private static func minimumAvailableFrameCount(

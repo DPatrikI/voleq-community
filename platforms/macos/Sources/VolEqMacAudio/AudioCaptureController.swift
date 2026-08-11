@@ -26,18 +26,27 @@ public final class AudioCaptureController: ObservableObject {
     @Published public private(set) var status = "Choose an audio-producing app, then start."
 
     private let coordinator: AudioCaptureLifecycleCoordinator
+    private let diagnostics: (any AudioLivenessDiagnosticsRecording)?
+    private var diagnosticCaptureWasStarted = false
 
     public convenience init(
-        permissionExplanationRequest: @escaping @MainActor () async -> Bool = { true }
+        permissionExplanationRequest: @escaping @MainActor () async -> Bool = { true },
+        audioLivenessDiagnostics: AudioLivenessDiagnostics? = nil
     ) {
         self.init(
             dependencies: .live(
-                permissionExplanationRequest: permissionExplanationRequest
-            )
+                permissionExplanationRequest: permissionExplanationRequest,
+                diagnostics: audioLivenessDiagnostics
+            ),
+            diagnostics: audioLivenessDiagnostics
         )
     }
 
-    init(dependencies: AudioCaptureDependencies) {
+    init(
+        dependencies: AudioCaptureDependencies,
+        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil
+    ) {
+        self.diagnostics = diagnostics
         coordinator = AudioCaptureLifecycleCoordinator(
             dependencies: dependencies
         )
@@ -138,6 +147,29 @@ extension AudioCaptureController: AudioCaptureLifecycleObserving {
         runtimeState = state.runtimeState
         systemAudioAccessState = state.systemAudioAccessState
         status = state.status
+        diagnostics?.recordLifecycle(
+            activity: Self.diagnosticLifecycleName(snapshot.phase),
+            captureMode: mode.rawValue
+        )
+        switch snapshot.phase {
+        case .preparing, .active, .stopping, .suspending, .suspended,
+             .recovering:
+            diagnosticCaptureWasStarted = true
+        case .stopped where diagnosticCaptureWasStarted:
+            diagnostics?.finalizeCaptureRun(
+                reason: "Audio capture stopped normally.",
+                cleanupComplete: true
+            )
+            diagnosticCaptureWasStarted = false
+        case .cleanupFailed where diagnosticCaptureWasStarted:
+            diagnostics?.finalizeCaptureRun(
+                reason: "Core Audio cleanup remained incomplete; Quit is required.",
+                cleanupComplete: false
+            )
+            diagnosticCaptureWasStarted = false
+        default:
+            break
+        }
     }
 
     func lifecycleDidRefreshProcesses(
@@ -146,6 +178,36 @@ extension AudioCaptureController: AudioCaptureLifecycleObserving {
     ) {
         self.processes = processes
         self.selectedProcessID = selectedProcessID
+    }
+
+    private static func diagnosticLifecycleName(
+        _ phase: CaptureLifecyclePhase
+    ) -> String {
+        switch phase {
+        case .stopped: "stopped"
+        case .explanationDeclined: "explanationDeclined"
+        case .ready: "ready"
+        case .installingRouteMonitor: "installingRouteMonitor"
+        case .explaining: "explainingPermission"
+        case .preparing: "preparing"
+        case .active: "active"
+        case .stopping: "stopping"
+        case .suspending: "suspending"
+        case .suspended: "suspended"
+        case let .recovering(_, reason):
+            switch reason {
+            case .outputRouteChanged: "recoveringOutputRouteChange"
+            case .systemWake: "recoveringSystemWake"
+            case .stalledCallbacks: "recoveringCallbackStall"
+            case .userRetry: "recoveringUserRetry"
+            }
+        case .recoveryFailed: "recoveryFailed"
+        case .processDiscoveryFailed: "processDiscoveryFailed"
+        case .routeMonitoringFailed: "routeMonitoringFailed"
+        case .failed: "failed"
+        case .verifiedFailure: "verifiedFailure"
+        case .cleanupFailed: "cleanupFailed"
+        }
     }
 
     func lifecycleDidRestoreIntent(_ intent: CaptureIntent) {

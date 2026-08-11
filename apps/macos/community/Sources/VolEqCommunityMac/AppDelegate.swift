@@ -3,6 +3,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 import VolEqMacAudio
 
 enum MacActivationPolicyTransition {
@@ -130,10 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workspaceLifecycle.start()
 
         didFinishLaunching = true
+#if !VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
         Task { @MainActor [weak self] in
             await Task.yield()
             self?.applicationModel.updates.applicationDidBecomeReady()
         }
+#endif
     }
 
     func startAudioRuntimeAnnouncements() {
@@ -191,6 +194,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor [weak self, weak sender] in
             guard let self else { return }
             await applicationModel.audio.prepareForApplicationTermination()
+            let cleanupComplete: Bool
+            if case .actionRequired(.cleanupFailed) =
+                applicationModel.audio.systemAudioAccessState {
+                cleanupComplete = false
+            } else {
+                cleanupComplete = true
+            }
+            await applicationModel.diagnostics?.finalizeAndWait(
+                reason: cleanupComplete
+                    ? "Diagnostic application terminated after audio cleanup."
+                    : "Diagnostic application terminated with incomplete Core Audio cleanup.",
+                cleanupComplete: cleanupComplete
+            )
             didCompleteAudioTermination = true
             isAwaitingAudioTermination = false
             if let sender { terminationReply(sender, true) }
@@ -202,6 +218,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applicationModel.updates.applicationWillTerminate()
         if !didCompleteAudioTermination {
             applicationModel.audio.stop()
+            applicationModel.diagnostics?.finalize(
+                reason: "Diagnostic application terminated before asynchronous cleanup completed.",
+                cleanupComplete: false
+            )
         }
     }
 
@@ -306,7 +326,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+        window.title = "VolEq Audio Liveness Diagnostic"
+#else
         window.title = "VolEq"
+#endif
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 548, height: 620))
@@ -324,7 +348,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+        window.title = "VolEq Audio Liveness Diagnostic Settings"
+#else
         window.title = "VolEq Settings"
+#endif
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 560, height: 480))
@@ -338,8 +366,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ApplicationShellActions(
             updates: applicationModel.updates,
             openSettings: { [weak self] in self?.showSettings() },
-            quit: { NSApp.terminate(nil) }
+            quit: { NSApp.terminate(nil) },
+            exportDiagnostics: { [weak self] in
+                self?.exportDiagnosticReport()
+            },
+            clearDiagnostics: { [weak self] in
+                self?.confirmDiagnosticHistoryClear()
+            }
         )
+    }
+
+    func exportDiagnosticReport() {
+        guard let diagnostics = applicationModel.diagnostics else {
+            presentDiagnosticResult(
+                title: "Diagnostics Unavailable",
+                message: "VolEq could not initialize its bounded diagnostic storage. Quit and relaunch the diagnostic app before testing.",
+                warning: true
+            )
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "Export Audio-Liveness Diagnostic Report"
+        panel.nameFieldStringValue = "VolEq-Audio-Liveness-\(diagnostics.sessionIdentifier).json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let destination = panel.url else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let data = try await diagnostics.exportReportData()
+                    try await Task.detached(priority: .utility) {
+                        try data.write(to: destination, options: .atomic)
+                    }.value
+                    self.presentDiagnosticResult(
+                        title: "Diagnostic Report Exported",
+                        message: "Saved metadata-only report to \(destination.path)."
+                    )
+                } catch {
+                    self.presentDiagnosticResult(
+                        title: "Couldn’t Export Diagnostic Report",
+                        message: error.localizedDescription,
+                        warning: true
+                    )
+                }
+            }
+        }
+        if let parent = visibleParentWindow {
+            panel.beginSheetModal(for: parent, completionHandler: completion)
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            panel.begin(completionHandler: completion)
+        }
+    }
+
+    func confirmDiagnosticHistoryClear() {
+        guard let diagnostics = applicationModel.diagnostics else {
+            presentDiagnosticResult(
+                title: "Diagnostics Unavailable",
+                message: "There is no local diagnostic journal to clear.",
+                warning: true
+            )
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Clear Diagnostic Data?"
+        alert.informativeText = "This permanently removes VolEq’s bounded local metadata journal. It does not affect reports you already exported."
+        alert.addButton(withTitle: "Clear Diagnostic Data")
+        let cancel = alert.addButton(withTitle: "Cancel")
+        cancel.keyEquivalent = "\u{1b}"
+        present(alert) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            Task { @MainActor [weak self] in
+                do {
+                    try await diagnostics.clearStoredData()
+                    self?.presentDiagnosticResult(
+                        title: "Diagnostic Data Cleared",
+                        message: "A new metadata-only diagnostic session is now recording."
+                    )
+                } catch {
+                    self?.presentDiagnosticResult(
+                        title: "Couldn’t Clear Diagnostic Data",
+                        message: error.localizedDescription,
+                        warning: true
+                    )
+                }
+            }
+        }
+    }
+
+    private func presentDiagnosticResult(
+        title: String,
+        message: String,
+        warning: Bool = false
+    ) {
+        let alert = NSAlert()
+        alert.alertStyle = warning ? .warning : .informational
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        present(alert) { _ in }
     }
 
     private func presentAutomaticCheckConsent() {

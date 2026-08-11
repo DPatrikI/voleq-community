@@ -36,7 +36,13 @@ struct VolEqCommunityMacApp: App {
                 actions: ApplicationShellActions(
                     updates: updates,
                     openSettings: { appDelegate.showSettings() },
-                    quit: { NSApp.terminate(nil) }
+                    quit: { NSApp.terminate(nil) },
+                    exportDiagnostics: {
+                        appDelegate.exportDiagnosticReport()
+                    },
+                    clearDiagnostics: {
+                        appDelegate.confirmDiagnosticHistoryClear()
+                    }
                 ),
                 switchToWindow: { presentation.mode = .window }
             )
@@ -48,6 +54,7 @@ struct VolEqCommunityMacApp: App {
         }
         .menuBarExtraStyle(.window)
         .commands {
+#if !VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
             CommandGroup(after: .appInfo) {
                 Button(
                     updates.isChecking
@@ -64,6 +71,13 @@ struct VolEqCommunityMacApp: App {
                 }
                 .disabled(updates.isChecking)
             }
+#else
+            CommandGroup(after: .appInfo) {
+                Button("Export Diagnostic Report…") {
+                    appDelegate.exportDiagnosticReport()
+                }
+            }
+#endif
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
                     appDelegate.showSettings()

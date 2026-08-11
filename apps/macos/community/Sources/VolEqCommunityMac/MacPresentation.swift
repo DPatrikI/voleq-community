@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import Foundation
+import Darwin
 import VolEqMacAudio
 
 enum MacPresentationMode: String, CaseIterable, Identifiable, Sendable {
@@ -67,6 +68,7 @@ final class VolEqApplicationModel {
     let systemAudioAccess: SystemAudioAccessPresentationController
     let presentation: MacPresentationController
     let updates: UpdateController
+    let diagnostics: AudioLivenessDiagnostics?
 
     init(
         defaults: UserDefaults,
@@ -79,11 +81,17 @@ final class VolEqApplicationModel {
             settingsOpener: systemSettingsOpener
         )
         self.systemAudioAccess = systemAudioAccess
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+        diagnostics = Self.makeAudioLivenessDiagnostics()
+#else
+        diagnostics = nil
+#endif
         audio = audioController ?? AudioCaptureController(
             permissionExplanationRequest: { [weak systemAudioAccess] in
                 guard let systemAudioAccess else { return false }
                 return await systemAudioAccess.requestExplanationAcceptance()
-            }
+            },
+            audioLivenessDiagnostics: diagnostics
         )
         presentation = MacPresentationController(defaults: defaults)
         let resolvedVersion: ApplicationVersion
@@ -123,4 +131,50 @@ final class VolEqApplicationModel {
         }
         return .standard
     }
+
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+    private static func makeAudioLivenessDiagnostics() -> AudioLivenessDiagnostics? {
+        guard let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return nil }
+        let storage = applicationSupport
+            .appendingPathComponent(
+                "VolEq Audio Liveness Diagnostic",
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                AudioLivenessDiagnostics.storageDirectoryName,
+                isDirectory: true
+            )
+        let info = Bundle.main.infoDictionary ?? [:]
+        let environment = AudioLivenessDiagnosticEnvironment(
+            macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            hardwareModel: hardwareModel(),
+            applicationVersion: info["CFBundleShortVersionString"] as? String
+                ?? "unknown",
+            applicationBuild: info["CFBundleVersion"] as? String ?? "unknown",
+            diagnosticVariant: info["VolEqDiagnosticVariant"] as? String
+                ?? "audio-liveness",
+            sourceCommit: info["VolEqDiagnosticSourceCommit"] as? String
+                ?? "unknown"
+        )
+        return try? AudioLivenessDiagnostics(
+            storageDirectoryURL: storage,
+            environment: environment
+        )
+    }
+
+    private static func hardwareModel() -> String {
+        var size = 0
+        guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 0 else {
+            return "unknown"
+        }
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.model", &bytes, &size, nil, 0) == 0 else {
+            return "unknown"
+        }
+        return String(cString: bytes)
+    }
+#endif
 }
