@@ -11,13 +11,19 @@ protocol AudioCapturePipeline: AnyObject, Sendable {
     func start() throws -> UInt64
     func stop() -> AudioCaptureTeardownReport
     func updateSettings(_ settings: LevelingSettings)
-    func drainDiagnosticTelemetry()
+    var livenessVerificationConfiguration: AudioLivenessVerificationConfiguration? { get }
+    func drainDiagnosticTelemetry() -> AudioLivenessObservation?
     func recordDiagnosticProcessingFailure(_ statusCode: OSStatus)
+    func setDiagnosticFaultInjectionEnabled(_ enabled: Bool) -> Bool
+    var isDiagnosticFaultInjectionEnabled: Bool { get }
 }
 
 extension AudioCapturePipeline {
-    func drainDiagnosticTelemetry() {}
+    var livenessVerificationConfiguration: AudioLivenessVerificationConfiguration? { nil }
+    func drainDiagnosticTelemetry() -> AudioLivenessObservation? { nil }
     func recordDiagnosticProcessingFailure(_ statusCode: OSStatus) {}
+    func setDiagnosticFaultInjectionEnabled(_ enabled: Bool) -> Bool { false }
+    var isDiagnosticFaultInjectionEnabled: Bool { false }
 }
 
 protocol AudioCapturePipelineBuilding: Sendable {
@@ -138,10 +144,15 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     private let callbackTelemetry: AudioCallbackTelemetry?
     private var storedProcessor: AudioIOProcessor?
     private var outputControlDiagnostics: AudioOutputControlDiagnosticsObserver?
+    private var storedVerificationConfiguration: AudioLivenessVerificationConfiguration?
     let heartbeat: AudioCallbackHeartbeat
 
     var processor: AudioIOProcessor? {
         lifecycleLock.withLock { storedProcessor }
+    }
+
+    var livenessVerificationConfiguration: AudioLivenessVerificationConfiguration? {
+        lifecycleLock.withLock { storedVerificationConfiguration }
     }
 
     private init(
@@ -208,6 +219,12 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         else {
             throw VolEqError.missingValue(
                 "The output route changed during startup. Processing did not start, and original audio remains unchanged. Try again on the current output."
+            )
+        }
+        lifecycleLock.withLock {
+            storedVerificationConfiguration = AudioLivenessVerificationConfiguration(
+                captureTarget: request.captureTarget,
+                outputDeviceUID: request.outputDeviceUID
             )
         }
 
@@ -336,12 +353,17 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
             ) { [heartbeat, callbackTelemetry] _, inputData, inputTime, outputData, outputTime in
                 heartbeat.recordCallback()
                 if let callbackTelemetry {
-                    let metadata = processor.processWithDiagnostics(
-                        input: inputData,
-                        inputTime: inputTime.pointee,
-                        output: outputData,
-                        outputTime: outputTime.pointee
-                    )
+                    let metadata = callbackTelemetry.isFaultInjectionEnabled
+                        ? processor.processSimulatedUnusableCapture(
+                            input: inputData,
+                            output: outputData
+                        )
+                        : processor.processWithDiagnostics(
+                            input: inputData,
+                            inputTime: inputTime.pointee,
+                            output: outputData,
+                            outputTime: outputTime.pointee
+                        )
                     let outputTimestamp = outputTime.pointee
                     let inputTimestamp = inputTime.pointee
                     let hostTime: UInt64
@@ -387,17 +409,34 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         }
     }
 
-    func drainDiagnosticTelemetry() {
-        guard let callbackTelemetry, let diagnostics else { return }
+    func drainDiagnosticTelemetry() -> AudioLivenessObservation? {
+        guard let callbackTelemetry, let diagnostics else { return nil }
         let drained = callbackTelemetry.drain()
         diagnostics.ingest(
             drained.records,
             droppedRecordCount: drained.droppedRecordCount
         )
+        return drained.records.last.map(AudioLivenessObservation.init)
     }
 
     func recordDiagnosticProcessingFailure(_ statusCode: OSStatus) {
         diagnostics?.recordProcessingFailure(statusCode)
+    }
+
+    func setDiagnosticFaultInjectionEnabled(_ enabled: Bool) -> Bool {
+        guard let callbackTelemetry else { return false }
+        callbackTelemetry.setFaultInjectionEnabled(enabled)
+        diagnostics?.recordRecoveryExperimentEvent(
+            kind: enabled
+                ? "controlledFaultInjectionBegan"
+                : "controlledFaultInjectionEnded",
+            reason: "Diagnostic-only atomic callback fault injection."
+        )
+        return true
+    }
+
+    var isDiagnosticFaultInjectionEnabled: Bool {
+        callbackTelemetry?.isFaultInjectionEnabled ?? false
     }
 
     var runningStatusSuffix: String {
@@ -410,7 +449,7 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     }
 
     func stop() -> AudioCaptureTeardownReport {
-        drainDiagnosticTelemetry()
+        _ = drainDiagnosticTelemetry()
         outputControlDiagnostics?.stop()
         outputControlDiagnostics = nil
         return resources.teardown()

@@ -9,10 +9,14 @@ source "$REPOSITORY_ROOT/scripts/lib/toolchain.zsh"
 ARTIFACT_DIRECTORY="$REPOSITORY_ROOT/artifacts/diagnostics/v0.1.1-audio-liveness"
 APP="$ARTIFACT_DIRECTORY/$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_APP_BUNDLE"
 EXECUTABLE="$REPOSITORY_ROOT/.build/release/$VOLEQ_EXECUTABLE_NAME"
+TEST_SOURCE_EXECUTABLE="$REPOSITORY_ROOT/.build/release/VolEqLivenessTestSource"
 SPEECH_RESOURCE_BUNDLE="$REPOSITORY_ROOT/.build/release/VolEq_VolEqSpeech.bundle"
 COMMUNITY_RESOURCES="$REPOSITORY_ROOT/apps/macos/community/Resources"
 INFO_PLIST="$COMMUNITY_RESOURCES/Info.plist"
 SOURCE_COMMIT="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
+if [[ -n "$(git -C "$REPOSITORY_ROOT" status --porcelain --untracked-files=normal)" ]]; then
+    SOURCE_COMMIT="${SOURCE_COMMIT}-dirty"
+fi
 BRAND_RESOURCE_KEYS=(CFBundleIconFile VolEqMenuBarTemplateFile)
 BRAND_RESOURCE_EXTENSIONS=(icns png)
 
@@ -27,10 +31,16 @@ env CLANG_MODULE_CACHE_PATH="$REPOSITORY_ROOT/.build/clang-module-cache" \
         --product "$VOLEQ_EXECUTABLE_NAME" \
         -c release \
         -Xswiftc -DVOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+env CLANG_MODULE_CACHE_PATH="$REPOSITORY_ROOT/.build/clang-module-cache" \
+    SWIFT_MODULECACHE_PATH="$REPOSITORY_ROOT/.build/swift-module-cache" \
+    "$VOLEQ_SWIFT_BINARY" build \
+        --product VolEqLivenessTestSource \
+        -c release
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$EXECUTABLE" "$APP/Contents/MacOS/$VOLEQ_EXECUTABLE_NAME"
+cp "$TEST_SOURCE_EXECUTABLE" "$APP/Contents/Helpers/VolEqLivenessTestSource"
 cp -R "$SPEECH_RESOURCE_BUNDLE" "$APP/Contents/Resources/VolEq_VolEqSpeech.bundle"
 cp "$INFO_PLIST" "$APP/Contents/Info.plist"
 plutil -replace CFBundleIdentifier \
@@ -80,6 +90,7 @@ printf '%s  %s\n' \
     | shasum -a 256 --check --status
 "$APP/Contents/MacOS/$VOLEQ_EXECUTABLE_NAME" --verify-speech-resources
 "$APP/Contents/MacOS/$VOLEQ_EXECUTABLE_NAME" --verify-app-resources
+codesign --force --sign - "$APP/Contents/Helpers/VolEqLivenessTestSource"
 codesign --force --sign - "$APP"
 plutil -lint "$APP/Contents/Info.plist"
 codesign --verify --deep --strict "$APP"

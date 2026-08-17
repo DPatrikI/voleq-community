@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isPresentingUpdateResult = false
     private var isAwaitingAudioTermination = false
     private var didCompleteAudioTermination = false
+    private var diagnosticTestSource: Process?
 
     private let applicationModel: VolEqApplicationModel
 
@@ -215,6 +216,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+        diagnosticTestSource?.terminate()
+        diagnosticTestSource = nil
+#endif
         applicationModel.updates.applicationWillTerminate()
         if !didCompleteAudioTermination {
             applicationModel.audio.stop()
@@ -328,13 +333,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let window = NSWindow(contentViewController: hostingController)
 #if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
         window.title = "VolEq Audio Liveness Diagnostic"
+        window.setContentSize(NSSize(width: 548, height: 700))
+        window.contentMinSize = NSSize(width: 548, height: 640)
 #else
         window.title = "VolEq"
+        window.setContentSize(NSSize(width: 548, height: 620))
+        window.contentMinSize = NSSize(width: 548, height: 560)
 #endif
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 548, height: 620))
-        window.contentMinSize = NSSize(width: 548, height: 560)
         window.tabbingMode = .disallowed
         window.center()
         return NSWindowController(window: window)
@@ -372,8 +379,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             clearDiagnostics: { [weak self] in
                 self?.confirmDiagnosticHistoryClear()
+            },
+            verifyAudio: { [weak self] in
+                self?.verifyAudioLivenessAndReconnect()
+            },
+            reconnectAudio: { [weak self] in
+                self?.reconnectDiagnosticAudio()
+            },
+            runControlledTest: { [weak self] in
+                self?.confirmControlledLivenessRecoveryTest()
             }
         )
+    }
+
+    func verifyAudioLivenessAndReconnect() {
+        guard applicationModel.audio.verifyAndReconnectIfNeeded() else {
+            presentDiagnosticResult(
+                title: "Verification Not Started",
+                message: applicationModel.audio.isRunning
+                    ? "Captured audio is currently available, or another verification is already running. If sound should be playing but remains absent, use Reconnect Audio."
+                    : "Start Leveling before verifying the captured-audio path.",
+                warning: true
+            )
+            return
+        }
+    }
+
+    func reconnectDiagnosticAudio() {
+        guard applicationModel.audio.reconnectAudio() else {
+            presentDiagnosticResult(
+                title: "Reconnect Unavailable",
+                message: "Reconnect Audio is available while Leveling is Active.",
+                warning: true
+            )
+            return
+        }
+    }
+
+    func confirmControlledLivenessRecoveryTest() {
+        guard applicationModel.audio.isRunning,
+              applicationModel.audio.mode == .system
+        else {
+            presentDiagnosticResult(
+                title: "Use Active Device-wide Leveling",
+                message: "The controlled test source is intentionally separate from VolEq, so this test requires Device-wide mode with Leveling Active.",
+                warning: true
+            )
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Run Controlled Recovery Test?"
+        alert.informativeText = "A quiet synthetic tone will play from a separate local process. The diagnostic will then simulate zero-filled capture, briefly silence replacement output, verify it through an independent unmuted probe, and reconnect once. No audio samples are stored."
+        alert.addButton(withTitle: "Run Test")
+        let cancel = alert.addButton(withTitle: "Cancel")
+        cancel.keyEquivalent = "\u{1b}"
+        present(alert) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.runControlledLivenessRecoveryTest()
+        }
+    }
+
+    private func runControlledLivenessRecoveryTest() {
+        let helper = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/VolEqLivenessTestSource")
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else {
+            presentDiagnosticResult(
+                title: "Test Source Missing",
+                message: "Rebuild the private audio-liveness diagnostic app; its synthetic test-source helper is unavailable.",
+                warning: true
+            )
+            return
+        }
+        diagnosticTestSource?.terminate()
+        let process = Process()
+        process.executableURL = helper
+        process.arguments = ["15"]
+        process.terminationHandler = { [weak self, weak process] _ in
+            Task { @MainActor in
+                guard let self, self.diagnosticTestSource === process else { return }
+                self.diagnosticTestSource = nil
+                self.applicationModel.diagnostics?.recordRecoveryExperimentEvent(
+                    kind: "controlledTestSourceEnded",
+                    reason: "Synthetic metadata-safe test source exited."
+                )
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            presentDiagnosticResult(
+                title: "Couldn’t Start Controlled Test",
+                message: error.localizedDescription,
+                warning: true
+            )
+            return
+        }
+        diagnosticTestSource = process
+        applicationModel.diagnostics?.recordRecoveryExperimentEvent(
+            kind: "controlledTestSourceStarted",
+            reason: "A separate process started a deterministic low-volume synthetic tone; no samples are retained."
+        )
+        Task { @MainActor [weak self, weak process] in
+            do {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch { return }
+            guard let self, self.diagnosticTestSource === process,
+                  self.applicationModel.audio.runControlledLivenessRecoveryTest()
+            else {
+                process?.terminate()
+                self?.presentDiagnosticResult(
+                    title: "Controlled Test Didn’t Start",
+                    message: "The audio pipeline was no longer Active or another verification was already running.",
+                    warning: true
+                )
+                return
+            }
+        }
     }
 
     func exportDiagnosticReport() {

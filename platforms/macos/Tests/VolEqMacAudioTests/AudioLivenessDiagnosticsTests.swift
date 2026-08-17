@@ -192,6 +192,10 @@ final class AudioLivenessDiagnosticsTests: AudioPipelineTestCase {
             bufferFrameSize: 512
         )
         diagnostics.recordProcessingFailure(-50)
+        diagnostics.recordRecoveryExperimentEvent(
+            kind: "confirmedStaleCapture",
+            reason: "Metadata-only test evidence."
+        )
         diagnostics.ingest(
             [diagnosticRecord(sequence: 1, peak: 0, allZero: true)],
             droppedRecordCount: 0
@@ -223,6 +227,35 @@ final class AudioLivenessDiagnosticsTests: AudioPipelineTestCase {
             $0["kind"] as? String == "processingFailure"
                 && $0["statusCode"] as? Int == -50
         })
+        XCTAssertTrue(timeline.contains {
+            $0["kind"] as? String == "confirmedStaleCapture"
+        })
+    }
+
+    func testCaptureRunFinalizationResetsAllZeroTransitionState() async throws {
+        let fixture = try DiagnosticFixture()
+        defer { fixture.remove() }
+        let diagnostics = try fixture.makeDiagnostics()
+        diagnostics.ingest(
+            [diagnosticRecord(sequence: 1, peak: 0, allZero: true)],
+            droppedRecordCount: 0
+        )
+        diagnostics.finalizeCaptureRun(
+            reason: "First run ended.",
+            cleanupComplete: true
+        )
+        diagnostics.ingest(
+            [diagnosticRecord(sequence: 2, peak: 0, allZero: true)],
+            droppedRecordCount: 0
+        )
+
+        let timeline = try await reportTimeline(from: diagnostics)
+        XCTAssertEqual(
+            timeline.filter {
+                $0["kind"] as? String == "capturedInputBecameAllZero"
+            }.count,
+            2
+        )
     }
 
     func testJournalStorageRotatesWithinConfiguredBoundAndIgnoresTruncatedTail() async throws {

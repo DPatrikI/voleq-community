@@ -80,6 +80,21 @@ public final class AudioCaptureController: ObservableObject {
         coordinator.retry(intent: captureIntent())
     }
 
+    @discardableResult
+    public func verifyAndReconnectIfNeeded() -> Bool {
+        coordinator.requestLivenessVerification()
+    }
+
+    @discardableResult
+    public func runControlledLivenessRecoveryTest() -> Bool {
+        coordinator.beginControlledLivenessFailureTest()
+    }
+
+    @discardableResult
+    public func reconnectAudio() -> Bool {
+        coordinator.reconnect()
+    }
+
     public var canRetryRecovery: Bool {
         captureState.activity == .recoveryFailed
             && (mode == .system
@@ -200,6 +215,8 @@ extension AudioCaptureController: AudioCaptureLifecycleObserving {
             case .systemWake: "recoveringSystemWake"
             case .stalledCallbacks: "recoveringCallbackStall"
             case .userRetry: "recoveringUserRetry"
+            case .userReconnect: "recoveringUserReconnect"
+            case .confirmedUnusableCapture: "recoveringConfirmedUnusableCapture"
             }
         case .recoveryFailed: "recoveryFailed"
         case .processDiscoveryFailed: "processDiscoveryFailed"

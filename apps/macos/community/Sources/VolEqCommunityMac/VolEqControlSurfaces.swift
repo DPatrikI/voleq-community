@@ -187,7 +187,11 @@ struct MenuBarControlSurface<Model: VolEqControlSurfaceModel>: View {
         // MenuBarExtra does not derive a useful intrinsic height from a
         // ScrollView. A fixed, bounded viewport keeps the popover visible;
         // overflow remains reachable through vertical scrolling.
+#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+        .frame(width: 360, height: 640)
+#else
         .frame(width: 360, height: 560)
+#endif
     }
 
     private var productName: String {
@@ -213,10 +217,31 @@ private struct DiagnosticBanner: View {
             )
             .font(compact ? .callout.weight(.semibold) : .headline)
 
-            Text("Stores bounded callback and route metadata only. It never records audio samples and never restarts Leveling because of silence.")
+            Text("Stores bounded metadata only. Recovery occurs only after an independent probe confirms stale capture, or when you explicitly request a reconnect.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Verify & Reconnect") {
+                    actions.verifyAudio()
+                }
+                .accessibilityIdentifier("voleq.verify-audio-liveness")
+
+                Button("Reconnect Audio") {
+                    actions.reconnectAudio()
+                }
+                .accessibilityIdentifier("voleq.reconnect-audio")
+            }
+            .buttonStyle(.bordered)
+
+            HStack {
+                Button("Run Controlled Recovery Test…") {
+                    actions.runControlledTest()
+                }
+                .accessibilityIdentifier("voleq.controlled-liveness-test")
+            }
+            .buttonStyle(.bordered)
 
             HStack {
                 Button("Export Diagnostic Report…") {

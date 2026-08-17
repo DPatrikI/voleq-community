@@ -44,7 +44,10 @@ final class AudioCaptureLifecycleCoordinator {
         )
         captureRuntime = AudioCaptureRuntime(
             pipelineBuilder: dependencies.pipelineBuilder,
-            healthMonitorBuilder: dependencies.callbackHealthMonitorBuilder
+            healthMonitorBuilder: dependencies.callbackHealthMonitorBuilder,
+            verificationProbeBuilder:
+                dependencies.livenessVerificationProbeBuilder,
+            diagnostics: dependencies.livenessDiagnostics
         )
         routeMonitorBootstrap.start { [weak self] in
             guard let self else { throw CancellationError() }
@@ -175,6 +178,29 @@ final class AudioCaptureLifecycleCoordinator {
             status: "Restoring Leveling — original audio is restored while VolEq reconnects."
         )
         scheduleRecovery(intent: reducedIntent, reason: .userRetry)
+    }
+
+    func requestLivenessVerification() -> Bool {
+        guard case .active = phase else { return false }
+        return captureRuntime.requestLivenessVerification(reason: "userRequested")
+    }
+
+    func beginControlledLivenessFailureTest() -> Bool {
+        guard case .active = phase else { return false }
+        return captureRuntime.beginControlledLivenessFailureTest()
+    }
+
+    func reconnect() -> Bool {
+        guard case let .recover(intent, reason) = CaptureLifecycleReducer.reduce(
+            phase: phase,
+            event: .userReconnectRequested
+        ) else { return false }
+        _ = apply(
+            event: .userReconnectRequested,
+            status: "Reconnecting Leveling — original audio is restored while VolEq rebuilds the captured-audio path."
+        )
+        beginAutomaticRecovery(intent: intent, reason: reason)
+        return true
     }
 
     func stop() {
@@ -416,6 +442,9 @@ final class AudioCaptureLifecycleCoordinator {
             },
             onProcessingFailure: { [weak self] statusCode in
                 self?.handleProcessingFailure(statusCode)
+            },
+            onConfirmedStaleCapture: { [weak self] in
+                self?.handleConfirmedStaleCapture()
             },
             runningStatus: status
         )
@@ -696,6 +725,18 @@ final class AudioCaptureLifecycleCoordinator {
         _ = apply(
             event: .callbacksStalled,
             status: "Restoring Leveling — VolEq is restoring the original audio path before reconnecting."
+        )
+        beginAutomaticRecovery(intent: intent, reason: reason)
+    }
+
+    private func handleConfirmedStaleCapture() {
+        guard case let .recover(intent, reason) = CaptureLifecycleReducer.reduce(
+            phase: phase,
+            event: .staleCaptureConfirmed
+        ) else { return }
+        _ = apply(
+            event: .staleCaptureConfirmed,
+            status: "A stale captured-audio path was confirmed. Restoring original audio before reconnecting once."
         )
         beginAutomaticRecovery(intent: intent, reason: reason)
     }

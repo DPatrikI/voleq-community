@@ -42,6 +42,15 @@ struct VolEqCommunityMacApp: App {
                     },
                     clearDiagnostics: {
                         appDelegate.confirmDiagnosticHistoryClear()
+                    },
+                    verifyAudio: {
+                        appDelegate.verifyAudioLivenessAndReconnect()
+                    },
+                    reconnectAudio: {
+                        appDelegate.reconnectDiagnosticAudio()
+                    },
+                    runControlledTest: {
+                        appDelegate.confirmControlledLivenessRecoveryTest()
                     }
                 ),
                 switchToWindow: { presentation.mode = .window }

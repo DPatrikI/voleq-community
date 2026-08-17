@@ -118,6 +118,71 @@ struct DiagnosticClock: Sendable {
     )
 }
 
+struct AudioLivenessObservation: Equatable, Sendable {
+    let callbackSequence: UInt64
+    let capturedFrameCount: UInt32
+    let requestedOutputFrameCount: UInt32
+    let capturedPeak: Float
+    let allZero: Bool
+    let noCapturedFrames: Bool
+    let partialDelivery: Bool
+    let nonfiniteInput: Bool
+    let outputRequestActive: Bool
+    let consecutiveAllZeroCallbacks: UInt32
+
+    init(
+        callbackSequence: UInt64,
+        capturedFrameCount: UInt32,
+        requestedOutputFrameCount: UInt32,
+        capturedPeak: Float,
+        allZero: Bool,
+        noCapturedFrames: Bool,
+        partialDelivery: Bool,
+        nonfiniteInput: Bool,
+        outputRequestActive: Bool,
+        consecutiveAllZeroCallbacks: UInt32
+    ) {
+        self.callbackSequence = callbackSequence
+        self.capturedFrameCount = capturedFrameCount
+        self.requestedOutputFrameCount = requestedOutputFrameCount
+        self.capturedPeak = capturedPeak
+        self.allZero = allZero
+        self.noCapturedFrames = noCapturedFrames
+        self.partialDelivery = partialDelivery
+        self.nonfiniteInput = nonfiniteInput
+        self.outputRequestActive = outputRequestActive
+        self.consecutiveAllZeroCallbacks = consecutiveAllZeroCallbacks
+    }
+
+    init(_ record: VolEqRealtimeDiagnosticRecord) {
+        callbackSequence = record.sequence
+        capturedFrameCount = record.captured_frame_count
+        requestedOutputFrameCount = record.requested_output_frame_count
+        capturedPeak = record.captured_peak
+        allZero = record.flags & UInt32(VOLEQ_DIAGNOSTIC_FLAG_ALL_ZERO) != 0
+        noCapturedFrames = record.flags
+            & UInt32(VOLEQ_DIAGNOSTIC_FLAG_NO_CAPTURED_FRAMES) != 0
+        partialDelivery = record.flags
+            & UInt32(VOLEQ_DIAGNOSTIC_FLAG_PARTIAL_DELIVERY) != 0
+        nonfiniteInput = record.flags
+            & UInt32(VOLEQ_DIAGNOSTIC_FLAG_NONFINITE_INPUT) != 0
+        outputRequestActive = record.flags
+            & UInt32(VOLEQ_DIAGNOSTIC_FLAG_OUTPUT_REQUEST_ACTIVE) != 0
+        consecutiveAllZeroCallbacks = record.zero_run_length
+    }
+
+    var isExactFullFrameZeroDelivery: Bool {
+        allZero
+            && !noCapturedFrames
+            && !partialDelivery
+            && !nonfiniteInput
+            && outputRequestActive
+            && capturedFrameCount > 0
+            && requestedOutputFrameCount > 0
+            && capturedPeak == 0
+    }
+}
+
 protocol AudioLivenessDiagnosticsRecording: AnyObject, Sendable {
     func recordLifecycle(activity: String, captureMode: String)
     func recordRoute(
@@ -134,6 +199,7 @@ protocol AudioLivenessDiagnosticsRecording: AnyObject, Sendable {
         reason: String,
         cleanupComplete: Bool?
     )
+    func recordRecoveryExperimentEvent(kind: String, reason: String?)
     func ingest(
         _ records: [VolEqRealtimeDiagnosticRecord],
         droppedRecordCount: UInt64
@@ -576,6 +642,15 @@ public final class AudioLivenessDiagnostics: @unchecked Sendable {
         }
     }
 
+    public func recordRecoveryExperimentEvent(
+        kind: String,
+        reason: String? = nil
+    ) {
+        queue.async { [self] in
+            append(kind: kind, reason: reason)
+        }
+    }
+
     func ingest(
         _ records: [VolEqRealtimeDiagnosticRecord],
         droppedRecordCount: UInt64
@@ -642,11 +717,18 @@ public final class AudioLivenessDiagnostics: @unchecked Sendable {
     }
 
     public func finalizeCaptureRun(reason: String, cleanupComplete: Bool) {
-        finalize(
-            kind: "captureRunFinalized",
-            reason: reason,
-            cleanupComplete: cleanupComplete
-        )
+        queue.async { [self] in
+            flushCallbackWindow()
+            append(
+                kind: "captureRunFinalized",
+                cleanupComplete: cleanupComplete,
+                reason: reason
+            )
+            previousAllZero = false
+            previousPartial = false
+            lastDroppedRecordCount = 0
+            windowStartedAt = clock.uptimeNanoseconds()
+        }
     }
 
     private func finalize(
@@ -858,6 +940,17 @@ final class AudioCallbackTelemetry: @unchecked Sendable {
         return (
             records,
             voleq_realtime_diagnostic_state_dropped_record_count(state)
+        )
+    }
+
+    var isFaultInjectionEnabled: Bool {
+        voleq_realtime_diagnostic_state_fault_injection_enabled(state)
+    }
+
+    func setFaultInjectionEnabled(_ enabled: Bool) {
+        voleq_realtime_diagnostic_state_set_fault_injection_enabled(
+            state,
+            enabled
         )
     }
 }

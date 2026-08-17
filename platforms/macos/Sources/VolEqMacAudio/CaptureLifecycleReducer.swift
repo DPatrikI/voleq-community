@@ -11,6 +11,8 @@ enum CaptureLifecycleEvent: Equatable, Sendable {
     case wake
     case routeChanged
     case callbacksStalled
+    case userReconnectRequested
+    case staleCaptureConfirmed
     case terminationRequested
     case startFlowBegan(CaptureIntent)
     case recoveryStartFlowBegan(
@@ -134,6 +136,14 @@ struct CaptureLifecycleReducer {
         case .callbacksStalled:
             guard case let .active(intent) = phase else { return .ignore }
             return .recover(intent, .stalledCallbacks)
+
+        case .userReconnectRequested:
+            guard case let .active(intent) = phase else { return .ignore }
+            return .recover(intent, .userReconnect)
+
+        case .staleCaptureConfirmed:
+            guard case let .active(intent) = phase else { return .ignore }
+            return .recover(intent, .confirmedUnusableCapture)
 
         case .terminationRequested:
             switch phase {

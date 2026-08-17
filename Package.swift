@@ -11,7 +11,11 @@ let package = Package(
         .library(name: "VolEqDSP", targets: ["VolEqDSP"]),
         .library(name: "VolEqSpeech", targets: ["VolEqSpeech"]),
         .library(name: "VolEqMacAudio", targets: ["VolEqMacAudio"]),
-        .executable(name: "VolEqCommunityMac", targets: ["VolEqCommunityMac"])
+        .executable(name: "VolEqCommunityMac", targets: ["VolEqCommunityMac"]),
+        .executable(
+            name: "VolEqLivenessTestSource",
+            targets: ["VolEqLivenessTestSource"]
+        )
     ],
     targets: [
         .target(
@@ -71,6 +75,10 @@ let package = Package(
             name: "VolEqCommunityMac",
             dependencies: ["VolEqMacAudio", "VolEqSpeech"],
             path: "apps/macos/community/Sources/VolEqCommunityMac"
+        ),
+        .executableTarget(
+            name: "VolEqLivenessTestSource",
+            path: "tools/audio-liveness-test-source/Sources"
         ),
         .executableTarget(
             name: "VolEqBenchmark",

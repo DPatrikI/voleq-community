@@ -7,6 +7,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <CoreAudio/CoreAudioTypes.h>
+
 typedef struct VolEqRealtimeContentState VolEqRealtimeContentState;
 
 VolEqRealtimeContentState *voleq_realtime_content_state_create(size_t capacity);
@@ -44,6 +46,24 @@ void voleq_realtime_heartbeat_record_callback(
 
 uint64_t voleq_realtime_heartbeat_callback_count(
     const VolEqRealtimeHeartbeat *heartbeat
+);
+
+typedef struct VolEqRealtimeSignalLatch VolEqRealtimeSignalLatch;
+
+VolEqRealtimeSignalLatch *voleq_realtime_signal_latch_create(void);
+void voleq_realtime_signal_latch_destroy(VolEqRealtimeSignalLatch *latch);
+
+void voleq_realtime_signal_latch_observe_callback(
+    VolEqRealtimeSignalLatch *latch,
+    const AudioBufferList *input_data
+);
+
+uint32_t voleq_realtime_signal_latch_qualifying_callback_count(
+    const VolEqRealtimeSignalLatch *latch
+);
+
+bool voleq_realtime_signal_latch_is_malformed(
+    const VolEqRealtimeSignalLatch *latch
 );
 
 typedef struct VolEqRealtimeProcessorPublication VolEqRealtimeProcessorPublication;
@@ -123,6 +143,15 @@ size_t voleq_realtime_diagnostic_state_read(
 );
 
 uint64_t voleq_realtime_diagnostic_state_dropped_record_count(
+    const VolEqRealtimeDiagnosticState *state
+);
+
+void voleq_realtime_diagnostic_state_set_fault_injection_enabled(
+    VolEqRealtimeDiagnosticState *state,
+    bool enabled
+);
+
+bool voleq_realtime_diagnostic_state_fault_injection_enabled(
     const VolEqRealtimeDiagnosticState *state
 );
 

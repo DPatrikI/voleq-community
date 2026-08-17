@@ -18,19 +18,28 @@ struct ApplicationShellActions {
     private let quitAction: () -> Void
     private let exportDiagnosticsAction: () -> Void
     private let clearDiagnosticsAction: () -> Void
+    private let verifyAudioAction: () -> Void
+    private let reconnectAudioAction: () -> Void
+    private let runControlledTestAction: () -> Void
 
     init(
         updates: any ApplicationUpdateCommandHandling,
         openSettings: @escaping () -> Void,
         quit: @escaping () -> Void,
         exportDiagnostics: @escaping () -> Void = {},
-        clearDiagnostics: @escaping () -> Void = {}
+        clearDiagnostics: @escaping () -> Void = {},
+        verifyAudio: @escaping () -> Void = {},
+        reconnectAudio: @escaping () -> Void = {},
+        runControlledTest: @escaping () -> Void = {}
     ) {
         self.updates = updates
         openSettingsAction = openSettings
         quitAction = quit
         exportDiagnosticsAction = exportDiagnostics
         clearDiagnosticsAction = clearDiagnostics
+        verifyAudioAction = verifyAudio
+        reconnectAudioAction = reconnectAudio
+        runControlledTestAction = runControlledTest
     }
 
     func checkForUpdates() async {
@@ -57,4 +66,10 @@ struct ApplicationShellActions {
     func clearDiagnostics() {
         clearDiagnosticsAction()
     }
+
+    func verifyAudio() { verifyAudioAction() }
+
+    func reconnectAudio() { reconnectAudioAction() }
+
+    func runControlledTest() { runControlledTestAction() }
 }

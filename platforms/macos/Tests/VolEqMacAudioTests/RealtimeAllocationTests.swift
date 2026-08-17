@@ -83,6 +83,51 @@ final class RealtimeAllocationTests: XCTestCase {
         XCTAssertEqual(allocationCount, 0)
     }
 
+    func testLivenessProbeObservationAndFaultInjectionAreAllocationFree() throws {
+        let latch = try AudioSignalLatch()
+        let format = floatFormat(sampleRate: 48_000)
+        let processor = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings(),
+            speechAwarenessEnabled: false
+        )
+        let frameCount = 512
+        var input = [Float](repeating: 0.125, count: frameCount * 2)
+        var output = [Float](repeating: 0.75, count: frameCount * 2)
+        let allocationCount = input.withUnsafeMutableBytes { inputBytes in
+            output.withUnsafeMutableBytes { outputBytes in
+                var inputList = AudioBufferList(
+                    mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(
+                        mNumberChannels: 2,
+                        mDataByteSize: UInt32(inputBytes.count),
+                        mData: inputBytes.baseAddress
+                    )
+                )
+                var outputList = AudioBufferList(
+                    mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(
+                        mNumberChannels: 2,
+                        mDataByteSize: UInt32(outputBytes.count),
+                        mData: outputBytes.baseAddress
+                    )
+                )
+                voleq_test_allocation_tracking_begin()
+                latch._testOnlyObserve(&inputList)
+                _ = processor.processSimulatedUnusableCapture(
+                    input: &inputList,
+                    output: &outputList
+                )
+                return voleq_test_allocation_tracking_end()
+            }
+        }
+
+        XCTAssertEqual(allocationCount, 0)
+        XCTAssertEqual(latch.qualifyingCallbackCount, 1)
+        XCTAssertTrue(output.allSatisfy { $0 == 0 })
+    }
+
     func testFirstAndWarmedStereoProcessingAreAllocationFree() throws {
         for sampleRate in [16_000.0, 44_100.0, 48_000.0] {
             try assertAllocationFree(

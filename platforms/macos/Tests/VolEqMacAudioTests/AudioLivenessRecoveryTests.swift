@@ -1,0 +1,381 @@
+// SPDX-License-Identifier: MPL-2.0
+
+import AudioToolbox
+import CoreAudio
+import CVolEqRealtime
+import Foundation
+import VolEqCore
+import XCTest
+@testable import VolEqMacAudio
+
+private let livenessTestIOProc: AudioDeviceIOProcID = {
+    _, _, _, _, _, _, _ in noErr
+}
+
+private final class ImmediateLivenessProbe:
+    AudioLivenessVerificationProbing,
+    @unchecked Sendable {
+    let outcome: AudioLivenessVerificationOutcome
+    private let lock = NSLock()
+    private var storedVerifyCount = 0
+    private var storedCancelCount = 0
+
+    init(outcome: AudioLivenessVerificationOutcome) {
+        self.outcome = outcome
+    }
+
+    var verifyCount: Int { lock.withLock { storedVerifyCount } }
+    var cancelCount: Int { lock.withLock { storedCancelCount } }
+
+    func verify() async -> AudioLivenessVerificationOutcome {
+        lock.withLock { storedVerifyCount += 1 }
+        return outcome
+    }
+
+    func cancel() { lock.withLock { storedCancelCount += 1 } }
+}
+
+private final class TestLivenessProbeBuilder:
+    AudioLivenessVerificationProbeBuilding,
+    @unchecked Sendable {
+    let probe: ImmediateLivenessProbe
+    private let lock = NSLock()
+    private var storedConfigurations: [AudioLivenessVerificationConfiguration] = []
+
+    init(outcome: AudioLivenessVerificationOutcome) {
+        probe = ImmediateLivenessProbe(outcome: outcome)
+    }
+
+    var configurations: [AudioLivenessVerificationConfiguration] {
+        lock.withLock { storedConfigurations }
+    }
+
+    func makeProbe(
+        configuration: AudioLivenessVerificationConfiguration
+    ) throws -> any AudioLivenessVerificationProbing {
+        lock.withLock { storedConfigurations.append(configuration) }
+        return probe
+    }
+}
+
+private final class LivenessTestPipeline:
+    AudioCapturePipeline,
+    @unchecked Sendable {
+    let heartbeat: AudioCallbackHeartbeat
+    let processor: AudioIOProcessor?
+    let runningStatusSuffix = ""
+    let livenessVerificationConfiguration:
+        AudioLivenessVerificationConfiguration? = .init(
+            captureTarget: .deviceWide,
+            outputDeviceUID: "test-output"
+        )
+    private let lock = NSLock()
+    private var storedObservation: AudioLivenessObservation?
+    private var faultInjected = false
+
+    init(observation: AudioLivenessObservation?) throws {
+        heartbeat = try AudioCallbackHeartbeat()
+        processor = nil
+        storedObservation = observation
+    }
+
+    func start() throws -> UInt64 { heartbeat.callbackCount }
+    func stop() -> AudioCaptureTeardownReport { .complete }
+    func updateSettings(_ settings: LevelingSettings) {}
+    func drainDiagnosticTelemetry() -> AudioLivenessObservation? {
+        lock.withLock { storedObservation }
+    }
+    func setDiagnosticFaultInjectionEnabled(_ enabled: Bool) -> Bool {
+        lock.withLock { faultInjected = enabled }
+        return true
+    }
+    var isDiagnosticFaultInjectionEnabled: Bool {
+        lock.withLock { faultInjected }
+    }
+}
+
+@MainActor
+final class AudioLivenessRecoveryTests: AudioPipelineTestCase {
+    func testIndependentSignalConfirmsStaleMainCaptureOnce() async throws {
+        let builder = TestLivenessProbeBuilder(
+            outcome: .signalDetected(qualifyingCallbackCount: 2)
+        )
+        let pipeline = try LivenessTestPipeline(observation: exactZeroObservation)
+        let monitor = AudioCaptureDiagnosticsMonitor(
+            verificationProbeBuilder: builder
+        )
+        var confirmations = 0
+        monitor.start(
+            pipeline: pipeline,
+            runningStatus: "Leveling",
+            isCurrent: { $0 === pipeline },
+            onStatus: { _ in },
+            onFailure: { _ in },
+            onConfirmedStaleCapture: { confirmations += 1 }
+        )
+        try await waitForAudioCondition("initial liveness observation") {
+            monitor.requestVerification(reason: "test")
+        }
+        try await waitForAudioCondition("stale capture confirmation") {
+            confirmations == 1
+        }
+
+        XCTAssertEqual(builder.probe.verifyCount, 1)
+        XCTAssertEqual(builder.configurations.count, 1)
+        XCTAssertEqual(confirmations, 1)
+        monitor.stop()
+    }
+
+    func testIndependentSilenceDoesNotRecoverOrLeaveInjectedFailureEnabled() async throws {
+        let builder = TestLivenessProbeBuilder(outcome: .noSignal)
+        let pipeline = try LivenessTestPipeline(observation: exactZeroObservation)
+        let monitor = AudioCaptureDiagnosticsMonitor(
+            verificationProbeBuilder: builder
+        )
+        var confirmations = 0
+        monitor.start(
+            pipeline: pipeline,
+            runningStatus: "Leveling",
+            isCurrent: { $0 === pipeline },
+            onStatus: { _ in },
+            onFailure: { _ in },
+            onConfirmedStaleCapture: { confirmations += 1 }
+        )
+        try await waitForAudioCondition("initial liveness observation") {
+            monitor.requestVerification(reason: "test")
+        }
+        try await waitForAudioCondition("silent probe completion") {
+            builder.probe.verifyCount == 1
+                && !pipeline.isDiagnosticFaultInjectionEnabled
+        }
+
+        XCTAssertEqual(confirmations, 0)
+        monitor.stop()
+    }
+
+    func testNonzeroMainCaptureSkipsProbe() async throws {
+        let builder = TestLivenessProbeBuilder(
+            outcome: .signalDetected(qualifyingCallbackCount: 2)
+        )
+        let pipeline = try LivenessTestPipeline(observation: nonzeroObservation)
+        let monitor = AudioCaptureDiagnosticsMonitor(
+            verificationProbeBuilder: builder
+        )
+        monitor.start(
+            pipeline: pipeline,
+            runningStatus: "Leveling",
+            isCurrent: { $0 === pipeline },
+            onStatus: { _ in },
+            onFailure: { _ in },
+            onConfirmedStaleCapture: {}
+        )
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        XCTAssertFalse(monitor.requestVerification(reason: "test"))
+        XCTAssertEqual(builder.probe.verifyCount, 0)
+        monitor.stop()
+    }
+
+    func testControlledFailureRunsOneProbeThenStopsInjectionDuringRecoveryTeardown() async throws {
+        let builder = TestLivenessProbeBuilder(
+            outcome: .signalDetected(qualifyingCallbackCount: 2)
+        )
+        let pipeline = try LivenessTestPipeline(observation: exactZeroObservation)
+        let monitor = AudioCaptureDiagnosticsMonitor(
+            verificationProbeBuilder: builder
+        )
+        var confirmations = 0
+        monitor.start(
+            pipeline: pipeline,
+            runningStatus: "Leveling",
+            isCurrent: { $0 === pipeline },
+            onStatus: { _ in },
+            onFailure: { _ in },
+            onConfirmedStaleCapture: {
+                confirmations += 1
+                monitor.stop()
+            }
+        )
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        XCTAssertTrue(monitor.beginControlledFailureTest())
+        try await waitForAudioCondition(
+            "controlled liveness recovery",
+            timeoutNanoseconds: 2_000_000_000
+        ) {
+            confirmations == 1
+        }
+
+        XCTAssertEqual(builder.probe.verifyCount, 1)
+        XCTAssertFalse(pipeline.isDiagnosticFaultInjectionEnabled)
+    }
+
+    func testSimulatedUnusableCaptureClearsOutputAndReportsFullFrameZeros() throws {
+        let format = floatFormat(sampleRate: 48_000, channelCount: 2)
+        let processor = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings(),
+            speechAwarenessEnabled: false
+        )
+        var input = [Float](repeating: 0.25, count: 128 * 2)
+        var output = [Float](repeating: 0.75, count: 128 * 2)
+        var metadata: AudioIOCallbackMetadata?
+        withInterleavedStereoBuffer(samples: &input) { inputList in
+            withMutableInterleavedBuffer(
+                samples: &output,
+                channelCount: 2
+            ) { outputList in
+                metadata = processor.processSimulatedUnusableCapture(
+                    input: inputList,
+                    output: outputList
+                )
+            }
+        }
+
+        XCTAssertEqual(output, [Float](repeating: 0, count: output.count))
+        let resolved = try XCTUnwrap(metadata)
+        XCTAssertEqual(resolved.inputFrameCount, 128)
+        XCTAssertEqual(resolved.outputFrameCount, 128)
+        XCTAssertEqual(resolved.capturedPeak, 0)
+        XCTAssertNotEqual(
+            resolved.flags & UInt32(VOLEQ_DIAGNOSTIC_FLAG_ALL_ZERO),
+            0
+        )
+    }
+
+    func testSignalLatchRequiresTwoFiniteAboveThresholdCallbacks() throws {
+        let latch = try AudioSignalLatch()
+        var first = [Float(2.0e-4), 0]
+        var subThresholdNoise = [Float(5.0e-5), 0]
+        var second = [Float(0), -3.0e-4]
+
+        withInterleavedStereoBuffer(samples: &first) { latch._testOnlyObserve($0) }
+        withInterleavedStereoBuffer(samples: &subThresholdNoise) {
+            latch._testOnlyObserve($0)
+        }
+        XCTAssertEqual(latch.qualifyingCallbackCount, 1)
+        withInterleavedStereoBuffer(samples: &second) { latch._testOnlyObserve($0) }
+
+        XCTAssertEqual(latch.qualifyingCallbackCount, 2)
+        XCTAssertFalse(latch.isMalformed)
+    }
+
+    func testSignalLatchRejectsUnboundedCallbackMetadataBeforeScanning() throws {
+        let latch = try AudioSignalLatch()
+        var sample = Float(0.25)
+        withUnsafeMutablePointer(to: &sample) { samplePointer in
+            var list = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: 2,
+                    mDataByteSize: UInt32((65_536 + 1) * MemoryLayout<Float>.size),
+                    mData: samplePointer
+                )
+            )
+            withUnsafePointer(to: &list) { latch._testOnlyObserve($0) }
+        }
+
+        XCTAssertTrue(latch.isMalformed)
+        XCTAssertEqual(latch.qualifyingCallbackCount, 0)
+    }
+
+    @available(macOS 14.2, *)
+    func testVerificationProbeUsesUnmutedInputOnlyGraphAndCleansUp() async throws {
+        let recorder = LockedLivenessEventRecorder()
+        let operations = CoreAudioCapturePipelineOperations(
+            start: { _, _ in recorder.append("start"); return noErr },
+            stop: { _, _ in recorder.append("stop"); return noErr },
+            destroyIOProc: { _, _ in recorder.append("destroyIOProc"); return noErr },
+            destroyAggregate: { _ in recorder.append("destroyAggregate"); return noErr },
+            destroyTap: { _ in recorder.append("destroyTap"); return noErr },
+            ownProcessObject: { 99 }
+        )
+        let probe = try CoreAudioLivenessVerificationProbe(
+            configuration: .init(
+                captureTarget: .deviceWide,
+                outputDeviceUID: "test-output"
+            ),
+            operations: operations,
+            prepareResourcesOverride: {}
+        )
+        probe._testOnlyAdoptResources(
+            tapID: 11,
+            aggregateDeviceID: 12,
+            ioProcID: livenessTestIOProc
+        )
+        let verification = Task { await probe.verify() }
+        try await waitForAudioCondition("verification probe start") {
+            recorder.events.contains("start")
+        }
+        var first = [Float(0.1), 0]
+        var second = [Float(0), -0.1]
+        withInterleavedStereoBuffer(samples: &first) { probe._testOnlyObserve($0) }
+        withInterleavedStereoBuffer(samples: &second) { probe._testOnlyObserve($0) }
+
+        let outcome = await verification.value
+        XCTAssertEqual(
+            outcome,
+            .signalDetected(qualifyingCallbackCount: 2)
+        )
+        XCTAssertEqual(
+            recorder.events,
+            ["start", "stop", "destroyIOProc", "destroyAggregate", "destroyTap"]
+        )
+    }
+
+    @available(macOS 14.2, *)
+    func testManualReconnectUsesNormalTeardownAndRebuild() async throws {
+        let rig = AudioCaptureTestRig()
+        let controller = rig.makeController()
+        controller.mode = .system
+        controller.start()
+        await waitForRuntimeState(controller, .active)
+
+        XCTAssertTrue(controller.reconnectAudio())
+        try await waitForAudioCondition("manual reconnect") {
+            rig.pipelines.pipelines.count == 2
+                && controller.runtimeState == .active
+        }
+
+        XCTAssertEqual(rig.pipelines.pipelines.first?.stopCount, 1)
+        XCTAssertEqual(rig.pipelines.pipelines.last?.startCount, 1)
+    }
+
+    private var exactZeroObservation: AudioLivenessObservation {
+        AudioLivenessObservation(
+            callbackSequence: 100,
+            capturedFrameCount: 512,
+            requestedOutputFrameCount: 512,
+            capturedPeak: 0,
+            allZero: true,
+            noCapturedFrames: false,
+            partialDelivery: false,
+            nonfiniteInput: false,
+            outputRequestActive: true,
+            consecutiveAllZeroCallbacks: 100
+        )
+    }
+
+    private var nonzeroObservation: AudioLivenessObservation {
+        AudioLivenessObservation(
+            callbackSequence: 100,
+            capturedFrameCount: 512,
+            requestedOutputFrameCount: 512,
+            capturedPeak: 0.25,
+            allZero: false,
+            noCapturedFrames: false,
+            partialDelivery: false,
+            nonfiniteInput: false,
+            outputRequestActive: true,
+            consecutiveAllZeroCallbacks: 0
+        )
+    }
+}
+
+private final class LockedLivenessEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+    var events: [String] { lock.withLock { storage } }
+    func append(_ value: String) { lock.withLock { storage.append(value) } }
+}

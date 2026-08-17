@@ -144,7 +144,7 @@ final class AudioCapturePipelineExecutor: @unchecked Sendable {
 final class AudioCaptureRuntime {
     private let pipelineBuilder: any AudioCapturePipelineBuilding
     private let healthMonitorBuilder: any AudioCallbackHealthMonitorBuilding
-    private let diagnosticsMonitor = AudioCaptureDiagnosticsMonitor()
+    private let diagnosticsMonitor: AudioCaptureDiagnosticsMonitor
     private let pipelineExecutor: AudioCapturePipelineExecutor
 
     private var pipeline: (any AudioCapturePipeline)?
@@ -165,11 +165,18 @@ final class AudioCaptureRuntime {
     init(
         pipelineBuilder: any AudioCapturePipelineBuilding,
         healthMonitorBuilder: any AudioCallbackHealthMonitorBuilding,
+        verificationProbeBuilder:
+            (any AudioLivenessVerificationProbeBuilding)? = nil,
+        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil,
         pipelineExecutor: AudioCapturePipelineExecutor = AudioCapturePipelineExecutor()
     ) {
         self.pipelineBuilder = pipelineBuilder
         self.healthMonitorBuilder = healthMonitorBuilder
         self.pipelineExecutor = pipelineExecutor
+        diagnosticsMonitor = AudioCaptureDiagnosticsMonitor(
+            verificationProbeBuilder: verificationProbeBuilder,
+            diagnostics: diagnostics
+        )
     }
 
     var isIdle: Bool {
@@ -192,6 +199,7 @@ final class AudioCaptureRuntime {
         onStall: @escaping @MainActor () -> Void,
         onStatus: @escaping @MainActor (String) -> Void,
         onProcessingFailure: @escaping @MainActor (OSStatus) -> Void,
+        onConfirmedStaleCapture: @escaping @MainActor () -> Void = {},
         runningStatus: String
     ) async -> AudioCaptureRuntimeStartResult {
         guard pipeline == nil, buildOperation == nil, startOperation == nil else {
@@ -276,11 +284,20 @@ final class AudioCaptureRuntime {
                         self?.pipeline === candidate
                     },
                     onStatus: onStatus,
-                    onFailure: onProcessingFailure
+                    onFailure: onProcessingFailure,
+                    onConfirmedStaleCapture: onConfirmedStaleCapture
                 )
                 return .active(runningStatusSuffix: runningStatusSuffix)
             }
         }
+    }
+
+    func requestLivenessVerification(reason: String) -> Bool {
+        diagnosticsMonitor.requestVerification(reason: reason)
+    }
+
+    func beginControlledLivenessFailureTest() -> Bool {
+        diagnosticsMonitor.beginControlledFailureTest()
     }
 
     func teardown() async -> AudioCaptureTeardownReport {

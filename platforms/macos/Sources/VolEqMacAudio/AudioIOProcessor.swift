@@ -273,6 +273,31 @@ final class AudioIOProcessor {
         )
     }
 
+    /// Diagnostic-build fault injection. The caller gates this with a
+    /// preallocated atomic flag; this method performs only bounded callback
+    /// work and deliberately emits no captured samples.
+    func processSimulatedUnusableCapture(
+        input: UnsafePointer<AudioBufferList>,
+        output: UnsafeMutablePointer<AudioBufferList>
+    ) -> AudioIOCallbackMetadata {
+        let inputFrameCount = Self.minimumAvailableFrameCount(in: input)
+        let outputFrameCount = Self.minimumAvailableFrameCount(in: output)
+        Self.clear(output: output)
+        return callbackMetadata(
+            inputFrameCount: inputFrameCount,
+            outputFrameCount: outputFrameCount,
+            inputStatistics: CapturedInputStatistics(
+                peak: 0,
+                hasSamples: inputFrameCount > 0,
+                containsNonfiniteSample: false
+            ),
+            path: selectedPath,
+            outcome: 4,
+            status: noErr,
+            collected: true
+        )
+    }
+
     private func process(
         input: UnsafePointer<AudioBufferList>,
         inputTime: AudioTimeStamp?,
