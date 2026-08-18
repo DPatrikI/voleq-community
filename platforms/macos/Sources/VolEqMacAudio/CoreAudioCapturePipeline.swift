@@ -452,7 +452,15 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         _ = drainDiagnosticTelemetry()
         outputControlDiagnostics?.stop()
         outputControlDiagnostics = nil
-        return resources.teardown()
+        let report = resources.teardown()
+        report.failures.forEach { diagnostics?.recordTeardownFailure($0) }
+        if report.permitsReplacementPipeline, !report.isComplete {
+            diagnostics?.recordRecoveryExperimentEvent(
+                kind: "outputRouteListenersQuarantined",
+                reason: "The tap, aggregate device, and IO callback were destroyed. Unremovable route listeners remain generation-gated in a retained ownership ledger."
+            )
+        }
+        return report
     }
 
     private func installOutputListeners(

@@ -7,11 +7,16 @@ import VolEqCore
 @MainActor
 protocol AudioCaptureLifecycleObserving: AnyObject {
     func lifecycleDidPublish(_ snapshot: AudioCaptureLifecycleSnapshot)
+    func lifecycleDidCompleteTeardown(_ report: AudioCaptureTeardownReport)
     func lifecycleDidRefreshProcesses(
         _ processes: [AudioProcess],
         selectedProcessID: AudioObjectID?
     )
     func lifecycleDidRestoreIntent(_ intent: CaptureIntent)
+}
+
+extension AudioCaptureLifecycleObserving {
+    func lifecycleDidCompleteTeardown(_ report: AudioCaptureTeardownReport) {}
 }
 
 @MainActor
@@ -317,7 +322,8 @@ final class AudioCaptureLifecycleCoordinator {
     private func beginSafeStart(
         intent: CaptureIntent,
         isRecovery: Bool,
-        recoverySourceIntent: CaptureIntent?
+        recoverySourceIntent: CaptureIntent?,
+        recoveryReason: AudioRecoveryReason?
     ) {
         guard canBeginOperation else { return }
         cancelProcessRefreshWork()
@@ -396,7 +402,8 @@ final class AudioCaptureLifecycleCoordinator {
             await startPipeline(
                 prepared,
                 generation: operationGeneration,
-                isRecovery: isRecovery
+                isRecovery: isRecovery,
+                recoveryReason: recoveryReason
             )
             if isCurrent(operationGeneration) { transitionTask = nil }
         }
@@ -405,7 +412,8 @@ final class AudioCaptureLifecycleCoordinator {
     private func startPipeline(
         _ preparedRequest: PreparedCaptureRequest,
         generation operationGeneration: UInt64,
-        isRecovery: Bool
+        isRecovery: Bool,
+        recoveryReason: AudioRecoveryReason?
     ) async {
         let request = resumableIntent.map {
             preparedRequest.replacingIntent($0)
@@ -446,6 +454,8 @@ final class AudioCaptureLifecycleCoordinator {
             onConfirmedStaleCapture: { [weak self] in
                 self?.handleConfirmedStaleCapture()
             },
+            automaticLivenessVerificationAfterRouteRecovery:
+                recoveryReason == .outputRouteChanged,
             runningStatus: status
         )
         guard isCurrent(operationGeneration) else { return }
@@ -556,7 +566,8 @@ final class AudioCaptureLifecycleCoordinator {
                 beginSafeStart(
                     intent: restoredIntent,
                     isRecovery: true,
-                    recoverySourceIntent: currentIntent
+                    recoverySourceIntent: currentIntent,
+                    recoveryReason: currentReason
                 )
             } catch is CancellationError {
                 return
@@ -627,7 +638,8 @@ final class AudioCaptureLifecycleCoordinator {
                 beginSafeStart(
                     intent: intent,
                     isRecovery: false,
-                    recoverySourceIntent: nil
+                    recoverySourceIntent: nil,
+                    recoveryReason: nil
                 )
             } catch {
                 guard isCurrent(operationGeneration) else { return }
@@ -794,8 +806,9 @@ final class AudioCaptureLifecycleCoordinator {
             guard let self else { return }
             let report = await teardownOwnedResources()
             guard operationGeneration == generation else { return }
+            observer?.lifecycleDidCompleteTeardown(report)
             transitionTask = nil
-            guard report.isComplete else {
+            guard report.permitsReplacementPipeline else {
                 applyTeardownFailure()
                 return
             }

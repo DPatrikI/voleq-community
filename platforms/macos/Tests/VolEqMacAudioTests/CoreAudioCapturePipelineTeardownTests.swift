@@ -186,8 +186,37 @@ final class CoreAudioCapturePipelineTeardownTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(owner.teardown().unresolvedSteps, [.activeOutputListeners])
+        let report = owner.teardown()
+        XCTAssertEqual(report.unresolvedSteps, [.activeOutputListeners])
+        XCTAssertTrue(report.permitsReplacementPipeline)
+        XCTAssertEqual(report.failures, [
+            AudioCaptureTeardownFailure(
+                step: .activeOutputListeners,
+                statusCode: -5,
+                objectID: 13,
+                propertySelector: kAudioDevicePropertyDeviceIsAlive,
+                propertyScope: kAudioObjectPropertyScopeGlobal,
+                propertyElement: kAudioObjectPropertyElementMain
+            ),
+        ])
         XCTAssertEqual(events, ["stop", "io", "aggregate", "tap"])
+    }
+
+    func testCriticalGraphFailureDoesNotPermitReplacementPipeline() {
+        let owner = makeOwner(operations: .init(
+            start: { _, _ in noErr },
+            stop: { _, _ in noErr },
+            destroyIOProc: { _, _ in -77 },
+            destroyAggregate: { _ in noErr },
+            destroyTap: { _ in noErr }
+        ))
+
+        let report = owner.teardown()
+
+        XCTAssertFalse(report.permitsReplacementPipeline)
+        XCTAssertTrue(report.unresolvedSteps.contains(.destroyIOProc))
+        XCTAssertEqual(report.failures.first?.statusCode, -77)
+        XCTAssertEqual(report.failures.first?.objectID, 12)
     }
 
     func testUnstartedOwnerSkipsStopButDestroysGraph() {

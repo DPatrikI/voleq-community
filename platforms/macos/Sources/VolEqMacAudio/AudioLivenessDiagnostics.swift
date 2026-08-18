@@ -199,6 +199,7 @@ protocol AudioLivenessDiagnosticsRecording: AnyObject, Sendable {
         reason: String,
         cleanupComplete: Bool?
     )
+    func recordTeardownFailure(_ failure: AudioCaptureTeardownFailure)
     func recordRecoveryExperimentEvent(kind: String, reason: String?)
     func ingest(
         _ records: [VolEqRealtimeDiagnosticRecord],
@@ -638,6 +639,30 @@ public final class AudioLivenessDiagnostics: @unchecked Sendable {
                 kind: "diagnosticListenerState",
                 cleanupComplete: cleanupComplete,
                 reason: reason
+            )
+        }
+    }
+
+    func recordTeardownFailure(_ failure: AudioCaptureTeardownFailure) {
+        queue.async { [self] in
+            var details = ["step=\(failure.step.diagnosticName)"]
+            if let objectID = failure.objectID {
+                details.append("objectID=\(objectID)")
+            }
+            if let selector = failure.propertySelector {
+                details.append("propertySelector=\(selector)")
+            }
+            if let scope = failure.propertyScope {
+                details.append("propertyScope=\(scope)")
+            }
+            if let element = failure.propertyElement {
+                details.append("propertyElement=\(element)")
+            }
+            append(
+                kind: "audioTeardownFailure",
+                statusCode: failure.statusCode,
+                cleanupComplete: false,
+                reason: details.joined(separator: ", ")
             )
         }
     }

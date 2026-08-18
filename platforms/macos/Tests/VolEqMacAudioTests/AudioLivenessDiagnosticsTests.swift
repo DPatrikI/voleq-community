@@ -232,6 +232,38 @@ final class AudioLivenessDiagnosticsTests: AudioPipelineTestCase {
         })
     }
 
+    func testTeardownFailureReportContainsExactMetadataButNoAudioPayload() async throws {
+        let fixture = try DiagnosticFixture()
+        defer { fixture.remove() }
+        let diagnostics = try fixture.makeDiagnostics()
+        diagnostics.recordTeardownFailure(AudioCaptureTeardownFailure(
+            step: .activeOutputListeners,
+            statusCode: -5,
+            objectID: 42,
+            propertySelector: 1_234,
+            propertyScope: 5_678,
+            propertyElement: 9
+        ))
+
+        let data = try await diagnostics.exportReportData()
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let timeline = try XCTUnwrap(root["timeline"] as? [[String: Any]])
+        let event = try XCTUnwrap(timeline.first {
+            $0["kind"] as? String == "audioTeardownFailure"
+        })
+
+        XCTAssertEqual(event["statusCode"] as? Int, -5)
+        let reason = try XCTUnwrap(event["reason"] as? String)
+        XCTAssertTrue(reason.contains("step=activeOutputListeners"))
+        XCTAssertTrue(reason.contains("objectID=42"))
+        XCTAssertTrue(reason.contains("propertySelector=1234"))
+        XCTAssertTrue(reason.contains("propertyScope=5678"))
+        XCTAssertTrue(reason.contains("propertyElement=9"))
+        XCTAssertFalse(containsForbiddenAudioPayloadKey(root))
+    }
+
     func testCaptureRunFinalizationResetsAllZeroTransitionState() async throws {
         let fixture = try DiagnosticFixture()
         defer { fixture.remove() }
@@ -359,6 +391,47 @@ final class AudioLivenessDiagnosticsTests: AudioPipelineTestCase {
         })
     }
 
+    @available(macOS 14.2, *)
+    func testVolumeListenerRemovalFailureReportsExactPropertyAndNeverSignalsRouteRecovery() async throws {
+        let fixture = try DiagnosticFixture()
+        defer { fixture.remove() }
+        let diagnostics = try fixture.makeDiagnostics()
+        let operations = AudioOutputControlDiagnosticsOperations(
+            hasProperty: { _, _ in true },
+            addListener: { _, _, _, _ in noErr },
+            removeListener: { _, address, _, _ in
+                address.mSelector == kAudioDevicePropertyMute ? -77 : noErr
+            },
+            readFloat: { _, _ in 0.5 },
+            readUInt32: { _, _ in 0 }
+        )
+        let observer = AudioOutputControlDiagnosticsObserver(
+            deviceID: 42,
+            diagnostics: diagnostics,
+            operations: operations
+        )
+
+        observer.start()
+        observer.stop()
+        let timeline = try await reportTimeline(from: diagnostics)
+        let failure = try XCTUnwrap(timeline.first {
+            ($0["reason"] as? String)?.contains("OSStatus=-77") == true
+        })
+
+        XCTAssertEqual(failure["kind"] as? String, "diagnosticListenerState")
+        XCTAssertTrue(
+            (failure["reason"] as? String)?.contains("deviceID=42") == true
+        )
+        XCTAssertTrue(
+            (failure["reason"] as? String)?.contains(
+                "propertySelector=\(kAudioDevicePropertyMute)"
+            ) == true
+        )
+        XCTAssertFalse(timeline.contains {
+            $0["kind"] as? String == "outputRouteChangeDetected"
+        })
+    }
+
     @MainActor
     @available(macOS 14.2, *)
     func testControllerStartStopFinalizesCaptureRunAfterCleanup() async throws {
@@ -411,6 +484,39 @@ final class AudioLivenessDiagnosticsTests: AudioPipelineTestCase {
         XCTAssertTrue(timeline.contains {
             $0["kind"] as? String == "captureRunFinalized"
                 && $0["cleanupComplete"] as? Bool == false
+        })
+    }
+
+    @MainActor
+    @available(macOS 14.2, *)
+    func testListenerOnlyCleanupFinalizesAsIncompleteWithoutBlockingStop() async throws {
+        let fixture = try DiagnosticFixture()
+        defer { fixture.remove() }
+        let diagnostics = try fixture.makeDiagnostics()
+        let rig = AudioCaptureTestRig()
+        rig.pipelines.make = {
+            let pipeline = try TestCapturePipeline()
+            pipeline.teardownReport = AudioCaptureTeardownReport(
+                unresolvedSteps: [.activeOutputListeners]
+            )
+            return pipeline
+        }
+        let controller = AudioCaptureController(
+            dependencies: rig.makeDependencies(),
+            diagnostics: diagnostics
+        )
+        controller.mode = .system
+
+        controller.start()
+        await waitForRuntimeState(controller, .active)
+        await controller.stopAndWait()
+
+        XCTAssertEqual(controller.runtimeState, .stopped)
+        let timeline = try await reportTimeline(from: diagnostics)
+        XCTAssertTrue(timeline.contains {
+            $0["kind"] as? String == "captureRunFinalized"
+                && $0["cleanupComplete"] as? Bool == false
+                && ($0["reason"] as? String)?.contains("quarantined") == true
         })
     }
 

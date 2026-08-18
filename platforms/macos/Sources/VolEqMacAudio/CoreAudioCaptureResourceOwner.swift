@@ -198,8 +198,11 @@ final class CoreAudioCaptureResourceOwner: @unchecked Sendable {
 
     private func teardownLocked() -> AudioCaptureTeardownReport {
         var unresolved = unresolvedTeardownSteps
-        if !removeOutputListeners() {
+        var failures: [AudioCaptureTeardownFailure] = []
+        let listenerFailures = removeOutputListeners()
+        if !listenerFailures.isEmpty {
             unresolved.addUnique(.activeOutputListeners)
+            failures.append(contentsOf: listenerFailures)
         } else {
             unresolved.removeAll { $0 == .activeOutputListeners }
         }
@@ -210,11 +213,17 @@ final class CoreAudioCaptureResourceOwner: @unchecked Sendable {
             case .prepared:
                 stoppedState = .stopped
             case .running:
-                if operations.stop(device, ioProc) == noErr {
+                let status = operations.stop(device, ioProc)
+                if status == noErr {
                     unresolved.removeAll { $0 == .stopIOProc }
                     stoppedState = .stopped
                 } else {
                     unresolved.addUnique(.stopIOProc)
+                    failures.append(AudioCaptureTeardownFailure(
+                        step: .stopIOProc,
+                        statusCode: status,
+                        objectID: device
+                    ))
                     stoppedState = .running
                 }
             case let .startPending(result):
@@ -234,16 +243,29 @@ final class CoreAudioCaptureResourceOwner: @unchecked Sendable {
                     unresolved.addUnique(.destroyIOProc)
                     unresolved.addUnique(.destroyAggregate)
                     unresolved.addUnique(.destroyTap)
+                    failures.append(AudioCaptureTeardownFailure(
+                        step: .finishIOProcStart,
+                        objectID: device
+                    ))
                     unresolvedTeardownSteps = unresolved
-                    return AudioCaptureTeardownReport(unresolvedSteps: unresolved)
+                    return AudioCaptureTeardownReport(
+                        unresolvedSteps: unresolved,
+                        failures: failures
+                    )
                 }
                 unresolved.removeAll { $0 == .finishIOProcStart }
                 if completed == noErr {
-                    if operations.stop(device, ioProc) == noErr {
+                    let status = operations.stop(device, ioProc)
+                    if status == noErr {
                         unresolved.removeAll { $0 == .stopIOProc }
                         stoppedState = .stopped
                     } else {
                         unresolved.addUnique(.stopIOProc)
+                        failures.append(AudioCaptureTeardownFailure(
+                            step: .stopIOProc,
+                            statusCode: status,
+                            objectID: device
+                        ))
                         stoppedState = .running
                     }
                 } else {
@@ -259,50 +281,90 @@ final class CoreAudioCaptureResourceOwner: @unchecked Sendable {
                 ioProc: ioProc,
                 state: stoppedState
             )
-            if operations.destroyIOProc(device, ioProc) == noErr {
+            let destroyStatus = operations.destroyIOProc(device, ioProc)
+            if destroyStatus == noErr {
                 graphStage = .aggregate(tap: tap, device: device)
                 unresolved.removeAll {
                     $0 == .finishIOProcStart
                         || $0 == .stopIOProc
                         || $0 == .destroyIOProc
                 }
+                failures.removeAll {
+                    $0.step == .finishIOProcStart
+                        || $0.step == .stopIOProc
+                        || $0.step == .destroyIOProc
+                }
             } else {
                 unresolved.addUnique(.destroyIOProc)
                 unresolved.addUnique(.destroyAggregate)
                 unresolved.addUnique(.destroyTap)
+                failures.append(AudioCaptureTeardownFailure(
+                    step: .destroyIOProc,
+                    statusCode: destroyStatus,
+                    objectID: device
+                ))
                 unresolvedTeardownSteps = unresolved
-                return AudioCaptureTeardownReport(unresolvedSteps: unresolved)
+                return AudioCaptureTeardownReport(
+                    unresolvedSteps: unresolved,
+                    failures: failures
+                )
             }
         }
 
         if case let .aggregate(tap, device) = graphStage {
-            if operations.destroyAggregate(device) == noErr {
+            let status = operations.destroyAggregate(device)
+            if status == noErr {
                 graphStage = .tap(tap)
                 unresolved.removeAll { $0 == .destroyAggregate }
             } else {
                 unresolved.addUnique(.destroyAggregate)
                 unresolved.addUnique(.destroyTap)
+                failures.append(AudioCaptureTeardownFailure(
+                    step: .destroyAggregate,
+                    statusCode: status,
+                    objectID: device
+                ))
                 unresolvedTeardownSteps = unresolved
-                return AudioCaptureTeardownReport(unresolvedSteps: unresolved)
+                return AudioCaptureTeardownReport(
+                    unresolvedSteps: unresolved,
+                    failures: failures
+                )
             }
         }
         if case let .tap(tap) = graphStage {
-            if operations.destroyTap(tap) == noErr {
+            let status = operations.destroyTap(tap)
+            if status == noErr {
                 graphStage = .empty
                 unresolved.removeAll { $0 == .destroyTap }
             } else {
                 unresolved.addUnique(.destroyTap)
+                failures.append(AudioCaptureTeardownFailure(
+                    step: .destroyTap,
+                    statusCode: status,
+                    objectID: tap
+                ))
             }
         }
         unresolvedTeardownSteps = unresolved
-        return AudioCaptureTeardownReport(unresolvedSteps: unresolved)
+        return AudioCaptureTeardownReport(
+            unresolvedSteps: unresolved,
+            failures: failures
+        )
     }
 
-    private func removeOutputListeners() -> Bool {
+    private func removeOutputListeners() -> [AudioCaptureTeardownFailure] {
         guard activeOutputDeviceID != kAudioObjectUnknown,
               let activeOutputListener
-        else { return activeOutputListenerAddresses.isEmpty }
+        else {
+            return activeOutputListenerAddresses.isEmpty
+                ? []
+                : [AudioCaptureTeardownFailure(
+                    step: .activeOutputListeners,
+                    objectID: activeOutputDeviceID
+                )]
+        }
         var unresolvedAddresses: [AudioObjectPropertyAddress] = []
+        var failures: [AudioCaptureTeardownFailure] = []
         for address in activeOutputListenerAddresses {
             let injectedStatus = operations.removePropertyListenerStatus(
                 activeOutputDeviceID,
@@ -317,13 +379,23 @@ final class CoreAudioCaptureResourceOwner: @unchecked Sendable {
                     activeOutputListener
                 )
                 : injectedStatus
-            if status != noErr { unresolvedAddresses.append(address) }
+            if status != noErr {
+                unresolvedAddresses.append(address)
+                failures.append(AudioCaptureTeardownFailure(
+                    step: .activeOutputListeners,
+                    statusCode: status,
+                    objectID: activeOutputDeviceID,
+                    propertySelector: address.mSelector,
+                    propertyScope: address.mScope,
+                    propertyElement: address.mElement
+                ))
+            }
         }
         activeOutputListenerAddresses = unresolvedAddresses
-        guard unresolvedAddresses.isEmpty else { return false }
+        guard unresolvedAddresses.isEmpty else { return failures }
         activeOutputDeviceID = AudioObjectID(kAudioObjectUnknown)
         self.activeOutputListener = nil
-        return true
+        return []
     }
 }
 

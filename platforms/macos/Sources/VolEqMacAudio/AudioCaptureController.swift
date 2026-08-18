@@ -28,6 +28,7 @@ public final class AudioCaptureController: ObservableObject {
     private let coordinator: AudioCaptureLifecycleCoordinator
     private let diagnostics: (any AudioLivenessDiagnosticsRecording)?
     private var diagnosticCaptureWasStarted = false
+    private var diagnosticCaptureCleanupComplete = true
 
     public convenience init(
         permissionExplanationRequest: @escaping @MainActor () async -> Bool = { true },
@@ -169,22 +170,35 @@ extension AudioCaptureController: AudioCaptureLifecycleObserving {
         switch snapshot.phase {
         case .preparing, .active, .stopping, .suspending, .suspended,
              .recovering:
+            if !diagnosticCaptureWasStarted {
+                diagnosticCaptureCleanupComplete = true
+            }
             diagnosticCaptureWasStarted = true
         case .stopped where diagnosticCaptureWasStarted:
             diagnostics?.finalizeCaptureRun(
-                reason: "Audio capture stopped normally.",
-                cleanupComplete: true
+                reason: diagnosticCaptureCleanupComplete
+                    ? "Audio capture stopped normally."
+                    : "The audio graph stopped, but one or more diagnostic route listeners remained quarantined.",
+                cleanupComplete: diagnosticCaptureCleanupComplete
             )
             diagnosticCaptureWasStarted = false
+            diagnosticCaptureCleanupComplete = true
         case .cleanupFailed where diagnosticCaptureWasStarted:
             diagnostics?.finalizeCaptureRun(
                 reason: "Core Audio cleanup remained incomplete; Quit is required.",
                 cleanupComplete: false
             )
             diagnosticCaptureWasStarted = false
+            diagnosticCaptureCleanupComplete = true
         default:
             break
         }
+    }
+
+    func lifecycleDidCompleteTeardown(_ report: AudioCaptureTeardownReport) {
+        guard diagnosticCaptureWasStarted else { return }
+        diagnosticCaptureCleanupComplete =
+            diagnosticCaptureCleanupComplete && report.isComplete
     }
 
     func lifecycleDidRefreshProcesses(

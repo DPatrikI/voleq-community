@@ -152,25 +152,33 @@ final class AudioOutputControlDiagnosticsObserver: @unchecked Sendable {
 
     func stop() {
         guard let listener else { return }
-        var complete = true
+        var failures: [(AudioObjectPropertyAddress, OSStatus)] = []
         for address in addresses {
-            if operations.removeListener(
+            let status = operations.removeListener(
                 deviceID,
                 address,
                 queue,
                 listener
-            ) != noErr {
-                complete = false
+            )
+            if status != noErr {
+                failures.append((address, status))
             }
         }
         addresses.removeAll(keepingCapacity: false)
         self.listener = nil
-        diagnostics.recordDiagnosticListenerState(
-            reason: complete
-                ? "Diagnostic output-control listeners stopped."
-                : "One or more diagnostic output-control listeners could not be removed.",
-            cleanupComplete: complete
-        )
+        if failures.isEmpty {
+            diagnostics.recordDiagnosticListenerState(
+                reason: "Diagnostic output-control listeners stopped.",
+                cleanupComplete: true
+            )
+        } else {
+            for (address, status) in failures {
+                diagnostics.recordDiagnosticListenerState(
+                    reason: "Diagnostic output-control listener removal failed: deviceID=\(deviceID), propertySelector=\(address.mSelector), propertyScope=\(address.mScope), propertyElement=\(address.mElement), OSStatus=\(status).",
+                    cleanupComplete: false
+                )
+            }
+        }
     }
 
     private static func publishCurrentValues(

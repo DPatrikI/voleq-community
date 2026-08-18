@@ -200,6 +200,7 @@ final class AudioCaptureRuntime {
         onStatus: @escaping @MainActor (String) -> Void,
         onProcessingFailure: @escaping @MainActor (OSStatus) -> Void,
         onConfirmedStaleCapture: @escaping @MainActor () -> Void = {},
+        automaticLivenessVerificationAfterRouteRecovery: Bool = false,
         runningStatus: String
     ) async -> AudioCaptureRuntimeStartResult {
         guard pipeline == nil, buildOperation == nil, startOperation == nil else {
@@ -280,6 +281,8 @@ final class AudioCaptureRuntime {
                 diagnosticsMonitor.start(
                     pipeline: builtPipeline,
                     runningStatus: runningStatus,
+                    automaticVerificationAfterRouteRecovery:
+                        automaticLivenessVerificationAfterRouteRecovery,
                     isCurrent: { [weak self] candidate in
                         self?.pipeline === candidate
                     },
@@ -315,7 +318,7 @@ final class AudioCaptureRuntime {
         startOperation?.lease.cancel()
         let report = await pipelineExecutor.teardown(currentPipeline)
 
-        if report.isComplete,
+        if report.permitsReplacementPipeline,
            let startOperation,
            startOperation.pipeline === currentPipeline {
             _ = await startOperation.task.value
@@ -324,7 +327,9 @@ final class AudioCaptureRuntime {
                 pipeline: currentPipeline
             )
         }
-        if pipeline === currentPipeline, report.isComplete { pipeline = nil }
+        if pipeline === currentPipeline, report.permitsReplacementPipeline {
+            pipeline = nil
+        }
         return report
     }
 

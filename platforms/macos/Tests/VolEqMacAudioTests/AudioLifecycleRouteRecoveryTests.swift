@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+import CoreAudio
 import Foundation
 import XCTest
 @testable import VolEqMacAudio
@@ -226,6 +227,39 @@ final class AudioLifecycleRouteRecoveryTests: XCTestCase {
         XCTAssertEqual(first.stopCount, 1)
         XCTAssertEqual(rig.routeGate.initialDelays, [350_000_000])
         XCTAssertEqual(rig.pipelines.pipelines.count, 2)
+    }
+
+    func testRouteRecoveryContinuesWhenOnlyOldGenerationListenersRemain() async throws {
+        let rig = AudioCaptureTestRig()
+        let controller = rig.makeController()
+        controller.mode = .system
+        controller.start()
+        await waitForRuntimeState(controller, .active)
+        let first = try XCTUnwrap(rig.pipelines.pipelines.first)
+        first.teardownReport = AudioCaptureTeardownReport(
+            unresolvedSteps: [.activeOutputListeners],
+            failures: [AudioCaptureTeardownFailure(
+                step: .activeOutputListeners,
+                statusCode: -5,
+                objectID: 13,
+                propertySelector: kAudioDevicePropertyDeviceIsAlive,
+                propertyScope: kAudioObjectPropertyScopeGlobal,
+                propertyElement: kAudioObjectPropertyElementMain
+            )]
+        )
+
+        rig.pipelines.triggerRouteChange()
+        try await waitForAudioCondition("listener-quarantined replacement") {
+            rig.pipelines.pipelines.count == 2
+                && controller.runtimeState == .active
+        }
+
+        XCTAssertEqual(first.stopCount, 1)
+        XCTAssertEqual(controller.runtimeState, .active)
+        XCTAssertNotEqual(
+            controller.systemAudioAccessState,
+            .actionRequired(.cleanupFailed)
+        )
     }
 
     func testRouteRecoveryUsesSettingsChangedAfterActivation() async throws {
