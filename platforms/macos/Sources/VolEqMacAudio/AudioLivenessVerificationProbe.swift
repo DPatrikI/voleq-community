@@ -13,13 +13,20 @@ enum AudioLivenessVerificationOutcome: Equatable, Sendable {
     case cleanupFailed([AudioCaptureTeardownStep])
 }
 
+enum AudioLivenessVerificationMode: Equatable, Sendable {
+    case bounded(timeoutNanoseconds: UInt64)
+    case untilSignalOrCancelled
+}
+
 struct AudioLivenessVerificationConfiguration: Equatable, Sendable {
     let captureTarget: AudioCaptureTarget
     let outputDeviceUID: String
 }
 
 protocol AudioLivenessVerificationProbing: AnyObject, Sendable {
-    func verify() async -> AudioLivenessVerificationOutcome
+    func verify(
+        mode: AudioLivenessVerificationMode
+    ) async -> AudioLivenessVerificationOutcome
     func cancel()
 }
 
@@ -100,7 +107,6 @@ final class CoreAudioLivenessVerificationProbe:
     @unchecked Sendable {
     private let configuration: AudioLivenessVerificationConfiguration
     private let operations: CoreAudioCapturePipelineOperations
-    private let timeoutNanoseconds: UInt64
     private let pollNanoseconds: UInt64
     private let lifecycleQueue: DispatchQueue
     private let startQueue: DispatchQueue
@@ -114,7 +120,6 @@ final class CoreAudioLivenessVerificationProbe:
     init(
         configuration: AudioLivenessVerificationConfiguration,
         operations: CoreAudioCapturePipelineOperations = .live,
-        timeoutNanoseconds: UInt64 = 3_000_000_000,
         pollNanoseconds: UInt64 = 20_000_000,
         prepareResourcesOverride: (() throws -> Void)? = nil,
         lifecycleQueue: DispatchQueue = DispatchQueue(
@@ -132,7 +137,6 @@ final class CoreAudioLivenessVerificationProbe:
     ) throws {
         self.configuration = configuration
         self.operations = operations
-        self.timeoutNanoseconds = timeoutNanoseconds
         self.pollNanoseconds = pollNanoseconds
         self.prepareResourcesOverride = prepareResourcesOverride
         self.lifecycleQueue = lifecycleQueue
@@ -145,7 +149,9 @@ final class CoreAudioLivenessVerificationProbe:
         )
     }
 
-    func verify() async -> AudioLivenessVerificationOutcome {
+    func verify(
+        mode: AudioLivenessVerificationMode
+    ) async -> AudioLivenessVerificationOutcome {
         guard !cancellation.isCancelled, !Task.isCancelled else {
             return .cancelled
         }
@@ -198,10 +204,12 @@ final class CoreAudioLivenessVerificationProbe:
                 outcome = .signalDetected(qualifyingCallbackCount: count)
                 break
             }
-            let now = DispatchTime.now().uptimeNanoseconds
-            if now >= startedAt, now - startedAt >= timeoutNanoseconds {
-                outcome = .noSignal
-                break
+            if case let .bounded(timeoutNanoseconds) = mode {
+                let now = DispatchTime.now().uptimeNanoseconds
+                if now >= startedAt, now - startedAt >= timeoutNanoseconds {
+                    outcome = .noSignal
+                    break
+                }
             }
             do {
                 try await Task.sleep(nanoseconds: pollNanoseconds)

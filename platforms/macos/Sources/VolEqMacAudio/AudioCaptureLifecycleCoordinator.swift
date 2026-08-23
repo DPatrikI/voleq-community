@@ -195,6 +195,10 @@ final class AudioCaptureLifecycleCoordinator {
         return captureRuntime.beginControlledLivenessFailureTest()
     }
 
+    func cancelControlledLivenessFailureTest() {
+        captureRuntime.cancelControlledLivenessFailureTest()
+    }
+
     func reconnect() -> Bool {
         guard case let .recover(intent, reason) = CaptureLifecycleReducer.reduce(
             phase: phase,
@@ -454,8 +458,10 @@ final class AudioCaptureLifecycleCoordinator {
             onConfirmedStaleCapture: { [weak self] in
                 self?.handleConfirmedStaleCapture()
             },
-            automaticLivenessVerificationAfterRouteRecovery:
-                recoveryReason == .outputRouteChanged,
+            automaticLivenessRecoveryEnabled:
+                request.intent.mode == .system
+                    && dependencies.livenessVerificationProbeBuilder != nil,
+            resetAutomaticRecoveryCircuitBreaker: !isRecovery,
             runningStatus: status
         )
         guard isCurrent(operationGeneration) else { return }

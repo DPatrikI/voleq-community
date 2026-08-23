@@ -181,6 +181,17 @@ struct AudioLivenessObservation: Equatable, Sendable {
             && requestedOutputFrameCount > 0
             && capturedPeak == 0
     }
+
+    var isHealthyNonzeroDelivery: Bool {
+        !allZero
+            && !noCapturedFrames
+            && !partialDelivery
+            && !nonfiniteInput
+            && outputRequestActive
+            && capturedFrameCount > 0
+            && requestedOutputFrameCount > 0
+            && capturedPeak > 0
+    }
 }
 
 protocol AudioLivenessDiagnosticsRecording: AnyObject, Sendable {
@@ -840,6 +851,15 @@ public final class AudioLivenessDiagnostics: @unchecked Sendable {
         let volumeChanges = timeline.filter {
             $0.kind == "systemVolumeChange"
         }
+        let sentinelStarts = timeline.filter {
+            $0.kind == "livenessSentinelStarted"
+        }
+        let confirmedRecoveries = timeline.filter {
+            $0.kind == "confirmedStaleCapture"
+        }
+        let normalResumptions = timeline.filter {
+            $0.kind == "livenessSentinelMainCaptureResumed"
+        }
         let callbackWindows = timeline.compactMap(\.callbackWindow)
         let activeUnusable = callbackWindows.reduce(UInt64(0)) {
             $0 &+ $1.outputActiveWhileInputUnusableCallbackCount
@@ -856,6 +876,9 @@ public final class AudioLivenessDiagnostics: @unchecked Sendable {
         )
         summary.append(
             "Output requests remained active during \(activeUnusable) retained callback(s) with all-zero or missing captured input. This is diagnostic metadata, not an automatic failure decision."
+        )
+        summary.append(
+            "The independent watcher started \(sentinelStarts.count) time(s), cancelled after \(normalResumptions.count) normal main-path resumption(s), and confirmed \(confirmedRecoveries.count) stale capture recovery event(s)."
         )
         return summary
     }

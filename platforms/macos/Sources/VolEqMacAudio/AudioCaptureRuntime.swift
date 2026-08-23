@@ -200,7 +200,8 @@ final class AudioCaptureRuntime {
         onStatus: @escaping @MainActor (String) -> Void,
         onProcessingFailure: @escaping @MainActor (OSStatus) -> Void,
         onConfirmedStaleCapture: @escaping @MainActor () -> Void = {},
-        automaticLivenessVerificationAfterRouteRecovery: Bool = false,
+        automaticLivenessRecoveryEnabled: Bool = false,
+        resetAutomaticRecoveryCircuitBreaker: Bool = false,
         runningStatus: String
     ) async -> AudioCaptureRuntimeStartResult {
         guard pipeline == nil, buildOperation == nil, startOperation == nil else {
@@ -281,8 +282,10 @@ final class AudioCaptureRuntime {
                 diagnosticsMonitor.start(
                     pipeline: builtPipeline,
                     runningStatus: runningStatus,
-                    automaticVerificationAfterRouteRecovery:
-                        automaticLivenessVerificationAfterRouteRecovery,
+                    automaticRecoveryEnabled:
+                        automaticLivenessRecoveryEnabled,
+                    resetAutomaticRecoveryCircuitBreaker:
+                        resetAutomaticRecoveryCircuitBreaker,
                     isCurrent: { [weak self] candidate in
                         self?.pipeline === candidate
                     },
@@ -303,10 +306,14 @@ final class AudioCaptureRuntime {
         diagnosticsMonitor.beginControlledFailureTest()
     }
 
+    func cancelControlledLivenessFailureTest() {
+        diagnosticsMonitor.cancelControlledFailureTest()
+    }
+
     func teardown() async -> AudioCaptureTeardownReport {
         healthMonitor?.stop()
         healthMonitor = nil
-        diagnosticsMonitor.stop()
+        let diagnosticsReport = await diagnosticsMonitor.stopAndWait()
 
         if let buildOperation {
             cancelStartup()
@@ -314,7 +321,7 @@ final class AudioCaptureRuntime {
             adoptBuildResult(buildResult, operationID: buildOperation.id)
         }
 
-        guard let currentPipeline = pipeline else { return .complete }
+        guard let currentPipeline = pipeline else { return diagnosticsReport }
         startOperation?.lease.cancel()
         let report = await pipelineExecutor.teardown(currentPipeline)
 
@@ -330,7 +337,7 @@ final class AudioCaptureRuntime {
         if pipeline === currentPipeline, report.permitsReplacementPipeline {
             pipeline = nil
         }
-        return report
+        return report.merging(diagnosticsReport)
     }
 
     private func adoptBuildResult(

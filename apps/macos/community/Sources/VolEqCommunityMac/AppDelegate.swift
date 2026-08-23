@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isAwaitingAudioTermination = false
     private var didCompleteAudioTermination = false
     private var diagnosticTestSource: Process?
+    private var diagnosticControlledTestTask: Task<Void, Never>?
 
     private let applicationModel: VolEqApplicationModel
 
@@ -217,6 +218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
 #if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
+        diagnosticControlledTestTask?.cancel()
+        diagnosticControlledTestTask = nil
         diagnosticTestSource?.terminate()
         diagnosticTestSource = nil
 #endif
@@ -430,7 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Run Controlled Recovery Test?"
-        alert.informativeText = "A quiet synthetic tone will play from a separate local process. The diagnostic will then simulate zero-filled capture, briefly silence replacement output, verify it through an independent unmuted probe, and reconnect once. No audio samples are stored."
+        alert.informativeText = "The diagnostic will simulate zero-filled capture and keep an independent metadata-only watcher in genuine silence for six seconds. A quiet synthetic tone will then play from a separate local process. VolEq should confirm the stale main path and reconnect once. No audio samples are stored."
         alert.addButton(withTitle: "Run Test")
         let cancel = alert.addButton(withTitle: "Cancel")
         cancel.keyEquivalent = "\u{1b}"
@@ -451,7 +454,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             return
         }
+        diagnosticControlledTestTask?.cancel()
+        diagnosticControlledTestTask = nil
         diagnosticTestSource?.terminate()
+        diagnosticTestSource = nil
+        applicationModel.audio.cancelControlledLivenessRecoveryTest()
+        guard applicationModel.audio.runControlledLivenessRecoveryTest() else {
+            presentDiagnosticResult(
+                title: "Controlled Test Didn’t Start",
+                message: "The device-wide audio pipeline was no longer Active or another verification was already running.",
+                warning: true
+            )
+            return
+        }
+        applicationModel.diagnostics?.recordRecoveryExperimentEvent(
+            kind: "controlledTestSilentSentinelPeriodBegan",
+            reason: "The main path was fault-injected to exact zero before any independent test signal existed."
+        )
+        diagnosticControlledTestTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 6_000_000_000)
+            } catch {
+                return
+            }
+            guard let self, applicationModel.audio.isRunning,
+                  applicationModel.audio.mode == .system
+            else { return }
+            diagnosticControlledTestTask = nil
+            startControlledTestSource(at: helper)
+        }
+    }
+
+    private func startControlledTestSource(at helper: URL) {
         let process = Process()
         process.executableURL = helper
         process.arguments = ["15"]
@@ -468,8 +502,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try process.run()
         } catch {
+            applicationModel.audio.cancelControlledLivenessRecoveryTest()
             presentDiagnosticResult(
-                title: "Couldn’t Start Controlled Test",
+                title: "Couldn’t Start Controlled Test Source",
                 message: error.localizedDescription,
                 warning: true
             )
@@ -478,24 +513,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         diagnosticTestSource = process
         applicationModel.diagnostics?.recordRecoveryExperimentEvent(
             kind: "controlledTestSourceStarted",
-            reason: "A separate process started a deterministic low-volume synthetic tone; no samples are retained."
+            reason: "A separate process started a deterministic low-volume synthetic tone after the independent watcher remained silent beyond the old timeout; no samples are retained."
         )
-        Task { @MainActor [weak self, weak process] in
-            do {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-            } catch { return }
-            guard let self, self.diagnosticTestSource === process,
-                  self.applicationModel.audio.runControlledLivenessRecoveryTest()
-            else {
-                process?.terminate()
-                self?.presentDiagnosticResult(
-                    title: "Controlled Test Didn’t Start",
-                    message: "The audio pipeline was no longer Active or another verification was already running.",
-                    warning: true
-                )
-                return
-            }
-        }
     }
 
     func exportDiagnosticReport() {

@@ -7,21 +7,27 @@ import Foundation
 final class AudioCaptureDiagnosticsMonitor {
     private enum VerificationTrigger {
         case userRequested(String)
-        case controlledFaultInjection
-        case automaticAfterOutputRouteRecovery
+        case automaticDuringExactZero
 
         var diagnosticReason: String {
             switch self {
             case let .userRequested(reason): reason
-            case .controlledFaultInjection: "controlledFaultInjection"
-            case .automaticAfterOutputRouteRecovery:
-                "automaticAfterOutputRouteRecovery"
+            case .automaticDuringExactZero: "automaticDuringExactZero"
             }
         }
 
-        var restoresRunningStatusWhenUnconfirmed: Bool {
-            if case .automaticAfterOutputRouteRecovery = self { return true }
+        var isAutomatic: Bool {
+            if case .automaticDuringExactZero = self { return true }
             return false
+        }
+
+        var mode: AudioLivenessVerificationMode {
+            switch self {
+            case .userRequested:
+                .bounded(timeoutNanoseconds: 3_000_000_000)
+            case .automaticDuringExactZero:
+                .untilSignalOrCancelled
+            }
         }
     }
 
@@ -31,17 +37,23 @@ final class AudioCaptureDiagnosticsMonitor {
     private var activeProbe: (any AudioLivenessVerificationProbing)?
     private var retainedProbeAfterCleanupFailure:
         (any AudioLivenessVerificationProbing)?
+    private var retainedProbeCleanupSteps: [AudioCaptureTeardownStep] = []
     private var latestObservation: AudioLivenessObservation?
     private let verificationProbeBuilder:
         (any AudioLivenessVerificationProbeBuilding)?
     private let diagnostics: (any AudioLivenessDiagnosticsRecording)?
     private let pollIntervalNanoseconds: UInt64
     private let automaticVerificationDelayNanoseconds: UInt64
+    private let automaticConfirmationDelayNanoseconds: UInt64
+    private let healthyRecoveryResetDelayNanoseconds: UInt64
     private let uptimeNanoseconds: @Sendable () -> UInt64
     private var runningStatus = ""
-    private var automaticVerificationArmed = false
-    private var automaticVerificationAttempted = false
+    private var automaticRecoveryEnabled = false
+    private var automaticVerificationAttemptedForZeroRun = false
+    private var automaticRecoveryBlockedUntilHealthy = false
     private var exactZeroDeliveryBeganAt: UInt64?
+    private var healthyNonzeroDeliveryBeganAt: UInt64?
+    private var activeVerificationTrigger: VerificationTrigger?
 
     init(
         verificationProbeBuilder:
@@ -49,6 +61,8 @@ final class AudioCaptureDiagnosticsMonitor {
         diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil,
         pollIntervalNanoseconds: UInt64 = 100_000_000,
         automaticVerificationDelayNanoseconds: UInt64 = 2_000_000_000,
+        automaticConfirmationDelayNanoseconds: UInt64 = 300_000_000,
+        healthyRecoveryResetDelayNanoseconds: UInt64 = 5_000_000_000,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
@@ -58,26 +72,34 @@ final class AudioCaptureDiagnosticsMonitor {
         self.pollIntervalNanoseconds = pollIntervalNanoseconds
         self.automaticVerificationDelayNanoseconds =
             automaticVerificationDelayNanoseconds
+        self.automaticConfirmationDelayNanoseconds =
+            automaticConfirmationDelayNanoseconds
+        self.healthyRecoveryResetDelayNanoseconds =
+            healthyRecoveryResetDelayNanoseconds
         self.uptimeNanoseconds = uptimeNanoseconds
     }
 
     func start(
         pipeline: any AudioCapturePipeline,
         runningStatus: String,
-        automaticVerificationAfterRouteRecovery: Bool = false,
+        automaticRecoveryEnabled: Bool = false,
+        resetAutomaticRecoveryCircuitBreaker: Bool = false,
         isCurrent: @escaping @MainActor (any AudioCapturePipeline) -> Bool,
         onStatus: @escaping @MainActor (String) -> Void,
         onFailure: @escaping @MainActor (OSStatus) -> Void,
         onConfirmedStaleCapture: @escaping @MainActor () -> Void
     ) {
-        stop()
         let processor = pipeline.processor
         activePipeline = pipeline
         self.runningStatus = runningStatus
-        automaticVerificationArmed =
-            automaticVerificationAfterRouteRecovery
-        automaticVerificationAttempted = false
+        self.automaticRecoveryEnabled = automaticRecoveryEnabled
+        automaticVerificationAttemptedForZeroRun = false
         exactZeroDeliveryBeganAt = nil
+        healthyNonzeroDeliveryBeganAt = nil
+        activeVerificationTrigger = nil
+        if resetAutomaticRecoveryCircuitBreaker {
+            automaticRecoveryBlockedUntilHealthy = false
+        }
         task = Task { @MainActor [weak pipeline] in
             var diagnosticsRecorded = false
             while !Task.isCancelled {
@@ -88,6 +110,9 @@ final class AudioCaptureDiagnosticsMonitor {
                 else { return }
                 if let observation = pipeline.drainDiagnosticTelemetry() {
                     latestObservation = observation
+                    considerAutomaticRecoveryCircuitBreakerReset(
+                        for: observation
+                    )
                     considerAutomaticVerification(for: observation)
                 }
                 if let failure = processor?.takePendingFailure() {
@@ -117,22 +142,34 @@ final class AudioCaptureDiagnosticsMonitor {
         statusAction = onStatus
     }
 
-    func stop() {
+    func stopAndWait() async -> AudioCaptureTeardownReport {
         task?.cancel()
         task = nil
         verificationTask?.cancel()
-        verificationTask = nil
         activeProbe?.cancel()
+        let pendingVerification = verificationTask
+        if let pendingVerification {
+            await pendingVerification.value
+        }
+        verificationTask = nil
         activeProbe = nil
         _ = activePipeline?.setDiagnosticFaultInjectionEnabled(false)
         activePipeline = nil
         latestObservation = nil
         runningStatus = ""
-        automaticVerificationArmed = false
-        automaticVerificationAttempted = false
+        automaticRecoveryEnabled = false
+        automaticVerificationAttemptedForZeroRun = false
         exactZeroDeliveryBeganAt = nil
+        healthyNonzeroDeliveryBeganAt = nil
+        activeVerificationTrigger = nil
         confirmedStaleCaptureAction = nil
         statusAction = nil
+        guard retainedProbeAfterCleanupFailure != nil else {
+            return .complete
+        }
+        return AudioCaptureTeardownReport(
+            unresolvedSteps: retainedProbeCleanupSteps
+        )
     }
 
     private var confirmedStaleCaptureAction: (@MainActor () -> Void)?
@@ -166,9 +203,12 @@ final class AudioCaptureDiagnosticsMonitor {
             kind: "livenessVerificationRequested",
             reason: trigger.diagnosticReason
         )
-        statusAction?(
-            "Verifying the captured-audio path without recording audio…"
-        )
+        if !trigger.isAutomatic {
+            statusAction?(
+                "Verifying the captured-audio path without recording audio…"
+            )
+        }
+        activeVerificationTrigger = trigger
         verificationTask = Task { @MainActor [weak self, weak pipeline] in
             guard let self, let pipeline else { return }
             let probe: any AudioLivenessVerificationProbing
@@ -187,39 +227,34 @@ final class AudioCaptureDiagnosticsMonitor {
             }
             activeProbe = probe
             diagnostics?.recordRecoveryExperimentEvent(
-                kind: "livenessProbeStarted",
+                kind: trigger.isAutomatic
+                    ? "livenessSentinelStarted"
+                    : "livenessProbeStarted",
                 reason: trigger.diagnosticReason
             )
-            let outcome = await probe.verify()
-            if case .cleanupFailed = outcome {
+            let outcome = await probe.verify(mode: trigger.mode)
+            if case let .cleanupFailed(steps) = outcome {
                 retainedProbeAfterCleanupFailure = probe
+                retainedProbeCleanupSteps = steps
             }
             guard activePipeline === pipeline, !Task.isCancelled else { return }
             activeProbe = nil
-            verificationTask = nil
 
             switch outcome {
             case let .signalDetected(count):
-                guard latestObservation?.isExactFullFrameZeroDelivery == true else {
-                    finishUnconfirmed(
+                if trigger.isAutomatic {
+                    await confirmAutomaticSignal(
                         pipeline: pipeline,
-                        kind: "livenessProbeMainCaptureResumed",
-                        reason: "The main capture path resumed before recovery was needed.",
+                        qualifyingCallbackCount: count,
                         trigger: trigger
                     )
-                    return
+                } else {
+                    confirmStaleCaptureIfStillNeeded(
+                        pipeline: pipeline,
+                        qualifyingCallbackCount: count,
+                        trigger: trigger
+                    )
                 }
-                diagnostics?.recordRecoveryExperimentEvent(
-                    kind: "confirmedStaleCapture",
-                    reason: "The main path remained exact-zero while an independent unmuted probe received \(count) qualifying callback(s)."
-                )
-                statusAction?(
-                    "A stale captured-audio path was confirmed. Reconnecting Leveling once…"
-                )
-                if pipeline.isDiagnosticFaultInjectionEnabled {
-                    _ = pipeline.setDiagnosticFaultInjectionEnabled(false)
-                }
-                confirmedStaleCaptureAction?()
             case .noSignal:
                 finishUnconfirmed(
                     pipeline: pipeline,
@@ -235,10 +270,16 @@ final class AudioCaptureDiagnosticsMonitor {
                     trigger: trigger
                 )
             case .cancelled:
+                let mainCaptureResumed = trigger.isAutomatic
+                    && latestObservation?.isExactFullFrameZeroDelivery != true
                 finishUnconfirmed(
                     pipeline: pipeline,
-                    kind: "livenessProbeCancelled",
-                    reason: "Audio verification was cancelled.",
+                    kind: mainCaptureResumed
+                        ? "livenessSentinelMainCaptureResumed"
+                        : "livenessProbeCancelled",
+                    reason: mainCaptureResumed
+                        ? "The main capture path resumed normally, so the independent watcher was cancelled."
+                        : "Audio verification was cancelled.",
                     trigger: trigger
                 )
             case let .coreAudioFailure(operation, status):
@@ -265,25 +306,17 @@ final class AudioCaptureDiagnosticsMonitor {
         guard verificationTask == nil,
               retainedProbeAfterCleanupFailure == nil,
               let pipeline = activePipeline,
+              automaticRecoveryEnabled,
               pipeline.setDiagnosticFaultInjectionEnabled(true)
         else { return false }
         statusAction?(
-            "Controlled test: simulating a live callback path with unusable captured input…"
+            "Controlled test: holding the main captured-audio path at exact zero while the independent watcher remains armed…"
         )
-        verificationTask = Task { @MainActor [weak self, weak pipeline] in
-            do {
-                try await Task.sleep(nanoseconds: 750_000_000)
-            } catch { return }
-            guard let self, let pipeline,
-                  activePipeline === pipeline,
-                  !Task.isCancelled
-            else { return }
-            verificationTask = nil
-            if !requestVerification(trigger: .controlledFaultInjection) {
-                _ = pipeline.setDiagnosticFaultInjectionEnabled(false)
-            }
-        }
         return true
+    }
+
+    func cancelControlledFailureTest() {
+        _ = activePipeline?.setDiagnosticFaultInjectionEnabled(false)
     }
 
     private func finishUnconfirmed(
@@ -297,8 +330,9 @@ final class AudioCaptureDiagnosticsMonitor {
         }
         verificationTask = nil
         activeProbe = nil
+        activeVerificationTrigger = nil
         diagnostics?.recordRecoveryExperimentEvent(kind: kind, reason: reason)
-        statusAction?(trigger.restoresRunningStatusWhenUnconfirmed
+        statusAction?(trigger.isAutomatic
             ? runningStatus
             : "The independent probe could not confirm stale capture. No automatic restart occurred; use Reconnect Audio if sound should be playing.")
     }
@@ -306,13 +340,19 @@ final class AudioCaptureDiagnosticsMonitor {
     private func considerAutomaticVerification(
         for observation: AudioLivenessObservation
     ) {
-        guard automaticVerificationArmed,
-              !automaticVerificationAttempted
+        guard automaticRecoveryEnabled
         else { return }
         guard observation.isExactFullFrameZeroDelivery else {
             exactZeroDeliveryBeganAt = nil
+            automaticVerificationAttemptedForZeroRun = false
+            if activeVerificationTrigger?.isAutomatic == true {
+                activeProbe?.cancel()
+            }
             return
         }
+        guard !automaticRecoveryBlockedUntilHealthy,
+              !automaticVerificationAttemptedForZeroRun
+        else { return }
         let now = uptimeNanoseconds()
         guard let beganAt = exactZeroDeliveryBeganAt else {
             exactZeroDeliveryBeganAt = now
@@ -321,7 +361,116 @@ final class AudioCaptureDiagnosticsMonitor {
         guard now &- beganAt >= automaticVerificationDelayNanoseconds else {
             return
         }
-        automaticVerificationAttempted = true
-        _ = requestVerification(trigger: .automaticAfterOutputRouteRecovery)
+        automaticVerificationAttemptedForZeroRun = true
+        _ = requestVerification(trigger: .automaticDuringExactZero)
+    }
+
+    private func confirmAutomaticSignal(
+        pipeline: any AudioCapturePipeline,
+        qualifyingCallbackCount: UInt32,
+        trigger: VerificationTrigger
+    ) async {
+        guard let sequenceAtSignal = latestObservation?.callbackSequence else {
+            finishUnconfirmed(
+                pipeline: pipeline,
+                kind: "livenessSentinelMainProgressUnconfirmed",
+                reason: "The main path had no callback sequence available when independent signal was detected.",
+                trigger: trigger
+            )
+            return
+        }
+        do {
+            try await Task.sleep(
+                nanoseconds: automaticConfirmationDelayNanoseconds
+            )
+        } catch {
+            finishUnconfirmed(
+                pipeline: pipeline,
+                kind: "livenessSentinelCancelled",
+                reason: "Automatic verification was cancelled before fresh main-path confirmation.",
+                trigger: trigger
+            )
+            return
+        }
+        guard activePipeline === pipeline, !Task.isCancelled else { return }
+        if let freshObservation = pipeline.drainDiagnosticTelemetry() {
+            latestObservation = freshObservation
+        }
+        guard let observation = latestObservation,
+              observation.callbackSequence > sequenceAtSignal
+        else {
+            finishUnconfirmed(
+                pipeline: pipeline,
+                kind: "livenessSentinelMainProgressUnconfirmed",
+                reason: "The main path did not publish a fresh callback observation after independent signal was detected.",
+                trigger: trigger
+            )
+            return
+        }
+        confirmStaleCaptureIfStillNeeded(
+            pipeline: pipeline,
+            qualifyingCallbackCount: qualifyingCallbackCount,
+            trigger: trigger
+        )
+    }
+
+    private func confirmStaleCaptureIfStillNeeded(
+        pipeline: any AudioCapturePipeline,
+        qualifyingCallbackCount: UInt32,
+        trigger: VerificationTrigger
+    ) {
+        guard latestObservation?.isExactFullFrameZeroDelivery == true else {
+            finishUnconfirmed(
+                pipeline: pipeline,
+                kind: trigger.isAutomatic
+                    ? "livenessSentinelMainCaptureResumed"
+                    : "livenessProbeMainCaptureResumed",
+                reason: "The main capture path resumed before recovery was needed.",
+                trigger: trigger
+            )
+            return
+        }
+        if trigger.isAutomatic {
+            automaticRecoveryBlockedUntilHealthy = true
+            healthyNonzeroDeliveryBeganAt = nil
+        }
+        verificationTask = nil
+        activeProbe = nil
+        activeVerificationTrigger = nil
+        diagnostics?.recordRecoveryExperimentEvent(
+            kind: "confirmedStaleCapture",
+            reason: "The main path remained exact-zero while an independent unmuted probe received \(qualifyingCallbackCount) qualifying callback(s)."
+        )
+        statusAction?(
+            "A stale captured-audio path was confirmed. Reconnecting Leveling once…"
+        )
+        if pipeline.isDiagnosticFaultInjectionEnabled {
+            _ = pipeline.setDiagnosticFaultInjectionEnabled(false)
+        }
+        confirmedStaleCaptureAction?()
+    }
+
+    private func considerAutomaticRecoveryCircuitBreakerReset(
+        for observation: AudioLivenessObservation
+    ) {
+        guard automaticRecoveryBlockedUntilHealthy else { return }
+        guard observation.isHealthyNonzeroDelivery else {
+            healthyNonzeroDeliveryBeganAt = nil
+            return
+        }
+        let now = uptimeNanoseconds()
+        guard let beganAt = healthyNonzeroDeliveryBeganAt else {
+            healthyNonzeroDeliveryBeganAt = now
+            return
+        }
+        guard now &- beganAt >= healthyRecoveryResetDelayNanoseconds else {
+            return
+        }
+        automaticRecoveryBlockedUntilHealthy = false
+        healthyNonzeroDeliveryBeganAt = nil
+        diagnostics?.recordRecoveryExperimentEvent(
+            kind: "automaticRecoveryCircuitBreakerReset",
+            reason: "The rebuilt main capture path delivered five continuous seconds of healthy nonzero audio."
+        )
     }
 }

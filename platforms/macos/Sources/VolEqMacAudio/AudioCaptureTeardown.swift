@@ -68,4 +68,17 @@ struct AudioCaptureTeardownReport: Equatable, Sendable {
     var permitsReplacementPipeline: Bool {
         unresolvedSteps.allSatisfy { $0 == .activeOutputListeners }
     }
+
+    func merging(
+        _ other: AudioCaptureTeardownReport
+    ) -> AudioCaptureTeardownReport {
+        var combinedSteps = unresolvedSteps
+        for step in other.unresolvedSteps where !combinedSteps.contains(step) {
+            combinedSteps.append(step)
+        }
+        return AudioCaptureTeardownReport(
+            unresolvedSteps: combinedSteps,
+            failures: failures + other.failures
+        )
+    }
 }

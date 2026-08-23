@@ -91,6 +91,10 @@ public final class AudioCaptureController: ObservableObject {
         coordinator.beginControlledLivenessFailureTest()
     }
 
+    public func cancelControlledLivenessRecoveryTest() {
+        coordinator.cancelControlledLivenessFailureTest()
+    }
+
     @discardableResult
     public func reconnectAudio() -> Bool {
         coordinator.reconnect()
