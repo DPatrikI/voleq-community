@@ -144,7 +144,8 @@ final class AudioCapturePipelineExecutor: @unchecked Sendable {
 final class AudioCaptureRuntime {
     private let pipelineBuilder: any AudioCapturePipelineBuilding
     private let healthMonitorBuilder: any AudioCallbackHealthMonitorBuilding
-    private let diagnosticsMonitor: AudioCaptureDiagnosticsMonitor
+    private let livenessMonitor: AudioCaptureLivenessMonitor
+    private let processingMonitor = AudioCaptureProcessingMonitor()
     private let pipelineExecutor: AudioCapturePipelineExecutor
 
     private var pipeline: (any AudioCapturePipeline)?
@@ -165,17 +166,21 @@ final class AudioCaptureRuntime {
     init(
         pipelineBuilder: any AudioCapturePipelineBuilding,
         healthMonitorBuilder: any AudioCallbackHealthMonitorBuilding,
-        verificationProbeBuilder:
-            (any AudioLivenessVerificationProbeBuilding)? = nil,
-        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil,
+        playbackActivityProbeBuilder:
+            (any AudioPlaybackActivityProbeBuilding)? = nil,
+        livenessPolicy: AudioCaptureLivenessPolicy = .production,
+        livenessUptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        },
         pipelineExecutor: AudioCapturePipelineExecutor = AudioCapturePipelineExecutor()
     ) {
         self.pipelineBuilder = pipelineBuilder
         self.healthMonitorBuilder = healthMonitorBuilder
         self.pipelineExecutor = pipelineExecutor
-        diagnosticsMonitor = AudioCaptureDiagnosticsMonitor(
-            verificationProbeBuilder: verificationProbeBuilder,
-            diagnostics: diagnostics
+        livenessMonitor = AudioCaptureLivenessMonitor(
+            playbackActivityProbeBuilder: playbackActivityProbeBuilder,
+            policy: livenessPolicy,
+            uptimeNanoseconds: livenessUptimeNanoseconds
         )
     }
 
@@ -279,9 +284,8 @@ final class AudioCaptureRuntime {
                     },
                     onStall: onStall
                 )
-                diagnosticsMonitor.start(
+                livenessMonitor.start(
                     pipeline: builtPipeline,
-                    runningStatus: runningStatus,
                     automaticRecoveryEnabled:
                         automaticLivenessRecoveryEnabled,
                     resetAutomaticRecoveryCircuitBreaker:
@@ -289,31 +293,27 @@ final class AudioCaptureRuntime {
                     isCurrent: { [weak self] candidate in
                         self?.pipeline === candidate
                     },
-                    onStatus: onStatus,
-                    onFailure: onProcessingFailure,
                     onConfirmedStaleCapture: onConfirmedStaleCapture
+                )
+                processingMonitor.start(
+                    pipeline: builtPipeline,
+                    runningStatus: runningStatus,
+                    isCurrent: { [weak self] candidate in
+                        self?.pipeline === candidate
+                    },
+                    onStatus: onStatus,
+                    onFailure: onProcessingFailure
                 )
                 return .active(runningStatusSuffix: runningStatusSuffix)
             }
         }
     }
 
-    func requestLivenessVerification(reason: String) -> Bool {
-        diagnosticsMonitor.requestVerification(reason: reason)
-    }
-
-    func beginControlledLivenessFailureTest() -> Bool {
-        diagnosticsMonitor.beginControlledFailureTest()
-    }
-
-    func cancelControlledLivenessFailureTest() {
-        diagnosticsMonitor.cancelControlledFailureTest()
-    }
-
     func teardown() async -> AudioCaptureTeardownReport {
         healthMonitor?.stop()
         healthMonitor = nil
-        let diagnosticsReport = await diagnosticsMonitor.stopAndWait()
+        processingMonitor.stop()
+        let livenessReport = await livenessMonitor.stopAndWait()
 
         if let buildOperation {
             cancelStartup()
@@ -321,7 +321,7 @@ final class AudioCaptureRuntime {
             adoptBuildResult(buildResult, operationID: buildOperation.id)
         }
 
-        guard let currentPipeline = pipeline else { return diagnosticsReport }
+        guard let currentPipeline = pipeline else { return livenessReport }
         startOperation?.lease.cancel()
         let report = await pipelineExecutor.teardown(currentPipeline)
 
@@ -337,7 +337,7 @@ final class AudioCaptureRuntime {
         if pipeline === currentPipeline, report.permitsReplacementPipeline {
             pipeline = nil
         }
-        return report.merging(diagnosticsReport)
+        return report.merging(livenessReport)
     }
 
     private func adoptBuildResult(

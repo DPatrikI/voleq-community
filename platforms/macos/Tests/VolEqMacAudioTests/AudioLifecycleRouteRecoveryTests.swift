@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import CoreAudio
 import Foundation
 import XCTest
 @testable import VolEqMacAudio
@@ -237,15 +236,7 @@ final class AudioLifecycleRouteRecoveryTests: XCTestCase {
         await waitForRuntimeState(controller, .active)
         let first = try XCTUnwrap(rig.pipelines.pipelines.first)
         first.teardownReport = AudioCaptureTeardownReport(
-            unresolvedSteps: [.activeOutputListeners],
-            failures: [AudioCaptureTeardownFailure(
-                step: .activeOutputListeners,
-                statusCode: -5,
-                objectID: 13,
-                propertySelector: kAudioDevicePropertyDeviceIsAlive,
-                propertyScope: kAudioObjectPropertyScopeGlobal,
-                propertyElement: kAudioObjectPropertyElementMain
-            )]
+            unresolvedSteps: [.activeOutputListeners]
         )
 
         rig.pipelines.triggerRouteChange()

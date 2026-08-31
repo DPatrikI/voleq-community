@@ -11,19 +11,13 @@ protocol AudioCapturePipeline: AnyObject, Sendable {
     func start() throws -> UInt64
     func stop() -> AudioCaptureTeardownReport
     func updateSettings(_ settings: LevelingSettings)
-    var livenessVerificationConfiguration: AudioLivenessVerificationConfiguration? { get }
-    func drainDiagnosticTelemetry() -> AudioLivenessObservation?
-    func recordDiagnosticProcessingFailure(_ statusCode: OSStatus)
-    func setDiagnosticFaultInjectionEnabled(_ enabled: Bool) -> Bool
-    var isDiagnosticFaultInjectionEnabled: Bool { get }
+    var playbackActivityConfiguration: AudioPlaybackActivityConfiguration? { get }
+    func drainLivenessObservations() -> [AudioCaptureLivenessObservation]
 }
 
 extension AudioCapturePipeline {
-    var livenessVerificationConfiguration: AudioLivenessVerificationConfiguration? { nil }
-    func drainDiagnosticTelemetry() -> AudioLivenessObservation? { nil }
-    func recordDiagnosticProcessingFailure(_ statusCode: OSStatus) {}
-    func setDiagnosticFaultInjectionEnabled(_ enabled: Bool) -> Bool { false }
-    var isDiagnosticFaultInjectionEnabled: Bool { false }
+    var playbackActivityConfiguration: AudioPlaybackActivityConfiguration? { nil }
+    func drainLivenessObservations() -> [AudioCaptureLivenessObservation] { [] }
 }
 
 protocol AudioCapturePipelineBuilding: Sendable {
@@ -100,14 +94,11 @@ struct CoreAudioCapturePipelineOperations: @unchecked Sendable {
 @available(macOS 14.2, *)
 struct CoreAudioCapturePipelineBuilder: AudioCapturePipelineBuilding {
     let operations: CoreAudioCapturePipelineOperations
-    let diagnostics: (any AudioLivenessDiagnosticsRecording)?
 
     init(
-        operations: CoreAudioCapturePipelineOperations = .live,
-        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil
+        operations: CoreAudioCapturePipelineOperations = .live
     ) {
         self.operations = operations
-        self.diagnostics = diagnostics
     }
 
     func build(
@@ -117,7 +108,6 @@ struct CoreAudioCapturePipelineBuilder: AudioCapturePipelineBuilding {
         try CoreAudioCapturePipeline.build(
             request: request,
             operations: operations,
-            diagnostics: diagnostics,
             onRouteChange: onRouteChange
         )
     }
@@ -140,32 +130,26 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     )
     private let lifecycleLock = NSLock()
     private let resources: CoreAudioCaptureResourceOwner
-    private let diagnostics: (any AudioLivenessDiagnosticsRecording)?
-    private let callbackTelemetry: AudioCallbackTelemetry?
+    private let livenessState: AudioCaptureLivenessState
     private var storedProcessor: AudioIOProcessor?
-    private var outputControlDiagnostics: AudioOutputControlDiagnosticsObserver?
-    private var storedVerificationConfiguration: AudioLivenessVerificationConfiguration?
+    private var storedPlaybackActivityConfiguration: AudioPlaybackActivityConfiguration?
     let heartbeat: AudioCallbackHeartbeat
 
     var processor: AudioIOProcessor? {
         lifecycleLock.withLock { storedProcessor }
     }
 
-    var livenessVerificationConfiguration: AudioLivenessVerificationConfiguration? {
-        lifecycleLock.withLock { storedVerificationConfiguration }
+    var playbackActivityConfiguration: AudioPlaybackActivityConfiguration? {
+        lifecycleLock.withLock { storedPlaybackActivityConfiguration }
     }
 
     private init(
         operations: CoreAudioCapturePipelineOperations,
-        heartbeat: AudioCallbackHeartbeat,
-        diagnostics: (any AudioLivenessDiagnosticsRecording)?
+        heartbeat: AudioCallbackHeartbeat
     ) throws {
         self.operations = operations
         self.heartbeat = heartbeat
-        self.diagnostics = diagnostics
-        callbackTelemetry = try diagnostics.map { _ in
-            try AudioCallbackTelemetry()
-        }
+        livenessState = try AudioCaptureLivenessState()
         resources = CoreAudioCaptureResourceOwner(
             operations: operations,
             routeQueue: routeQueue
@@ -175,13 +159,11 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     static func build(
         request: PreparedCaptureRequest,
         operations: CoreAudioCapturePipelineOperations,
-        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil,
         onRouteChange: @escaping @MainActor @Sendable () -> Void
     ) throws -> CoreAudioCapturePipeline {
         let pipeline = try CoreAudioCapturePipeline(
             operations: operations,
-            heartbeat: try AudioCallbackHeartbeat(),
-            diagnostics: diagnostics
+            heartbeat: try AudioCallbackHeartbeat()
         )
         do {
             try pipeline.prepare(request: request, onRouteChange: onRouteChange)
@@ -222,7 +204,7 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
             )
         }
         lifecycleLock.withLock {
-            storedVerificationConfiguration = AudioLivenessVerificationConfiguration(
+            storedPlaybackActivityConfiguration = AudioPlaybackActivityConfiguration(
                 captureTarget: request.captureTarget,
                 outputDeviceUID: request.outputDeviceUID
             )
@@ -232,25 +214,6 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
             deviceID: outputDeviceID,
             onRouteChange: onRouteChange
         )
-        let bufferFrameSize: UInt32? = try? readValue(
-            objectID: outputDeviceID,
-            selector: kAudioDevicePropertyBufferFrameSize
-        )
-        diagnostics?.recordRoute(
-            uid: outputUID,
-            sampleRate: outputFormat.mSampleRate,
-            channelCount: outputFormat.mChannelsPerFrame,
-            bufferFrameSize: bufferFrameSize
-        )
-        if let diagnostics {
-            let observer = AudioOutputControlDiagnosticsObserver(
-                deviceID: outputDeviceID,
-                diagnostics: diagnostics
-            )
-            observer.start()
-            outputControlDiagnostics = observer
-        }
-
         let tapDescription = CATapDescription()
         tapDescription.name = "VolEq Capture"
         tapDescription.isPrivate = true
@@ -350,42 +313,15 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
                 &ioProcID,
                 aggregateDeviceID,
                 ioQueue
-            ) { [heartbeat, callbackTelemetry] _, inputData, inputTime, outputData, outputTime in
+            ) { [heartbeat, livenessState] _, inputData, inputTime, outputData, outputTime in
                 heartbeat.recordCallback()
-                if let callbackTelemetry {
-                    let metadata = callbackTelemetry.isFaultInjectionEnabled
-                        ? processor.processSimulatedUnusableCapture(
-                            input: inputData,
-                            output: outputData
-                        )
-                        : processor.processWithDiagnostics(
-                            input: inputData,
-                            inputTime: inputTime.pointee,
-                            output: outputData,
-                            outputTime: outputTime.pointee
-                        )
-                    let outputTimestamp = outputTime.pointee
-                    let inputTimestamp = inputTime.pointee
-                    let hostTime: UInt64
-                    if outputTimestamp.mFlags.contains(.hostTimeValid) {
-                        hostTime = outputTimestamp.mHostTime
-                    } else if inputTimestamp.mFlags.contains(.hostTimeValid) {
-                        hostTime = inputTimestamp.mHostTime
-                    } else {
-                        hostTime = 0
-                    }
-                    callbackTelemetry.record(
-                        hostTime: hostTime,
-                        metadata: metadata
-                    )
-                } else {
-                    processor.process(
-                        input: inputData,
-                        inputTime: inputTime.pointee,
-                        output: outputData,
-                        outputTime: outputTime.pointee
-                    )
-                }
+                let metadata = processor.processWithLivenessObservation(
+                    input: inputData,
+                    inputTime: inputTime.pointee,
+                    output: outputData,
+                    outputTime: outputTime.pointee
+                )
+                livenessState.record(metadata)
             },
             "Create audio processing callback"
         )
@@ -409,34 +345,8 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         }
     }
 
-    func drainDiagnosticTelemetry() -> AudioLivenessObservation? {
-        guard let callbackTelemetry, let diagnostics else { return nil }
-        let drained = callbackTelemetry.drain()
-        diagnostics.ingest(
-            drained.records,
-            droppedRecordCount: drained.droppedRecordCount
-        )
-        return drained.records.last.map(AudioLivenessObservation.init)
-    }
-
-    func recordDiagnosticProcessingFailure(_ statusCode: OSStatus) {
-        diagnostics?.recordProcessingFailure(statusCode)
-    }
-
-    func setDiagnosticFaultInjectionEnabled(_ enabled: Bool) -> Bool {
-        guard let callbackTelemetry else { return false }
-        callbackTelemetry.setFaultInjectionEnabled(enabled)
-        diagnostics?.recordRecoveryExperimentEvent(
-            kind: enabled
-                ? "controlledFaultInjectionBegan"
-                : "controlledFaultInjectionEnded",
-            reason: "Diagnostic-only atomic callback fault injection."
-        )
-        return true
-    }
-
-    var isDiagnosticFaultInjectionEnabled: Bool {
-        callbackTelemetry?.isFaultInjectionEnabled ?? false
+    func drainLivenessObservations() -> [AudioCaptureLivenessObservation] {
+        livenessState.drain()
     }
 
     var runningStatusSuffix: String {
@@ -449,18 +359,7 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     }
 
     func stop() -> AudioCaptureTeardownReport {
-        _ = drainDiagnosticTelemetry()
-        outputControlDiagnostics?.stop()
-        outputControlDiagnostics = nil
-        let report = resources.teardown()
-        report.failures.forEach { diagnostics?.recordTeardownFailure($0) }
-        if report.permitsReplacementPipeline, !report.isComplete {
-            diagnostics?.recordRecoveryExperimentEvent(
-                kind: "outputRouteListenersQuarantined",
-                reason: "The tap, aggregate device, and IO callback were destroyed. Unremovable route listeners remain generation-gated in a retained ownership ledger."
-            )
-        }
-        return report
+        resources.teardown()
     }
 
     private func installOutputListeners(
@@ -468,9 +367,7 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         onRouteChange: @escaping @MainActor @Sendable () -> Void
     ) throws {
         let ingress = AudioRouteChangeSignalCoalescer(deliver: onRouteChange)
-        let diagnostics = diagnostics
         let listener: AudioObjectPropertyListenerBlock = { _, _ in
-            diagnostics?.recordRouteChangeDetected()
             ingress.signal()
         }
         let addresses = [
@@ -497,7 +394,6 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     }
 
     deinit {
-        outputControlDiagnostics?.stop()
         let resources = resources
         Self.abandonedCleanupQueue.async {
             let report = resources.teardown()

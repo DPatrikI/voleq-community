@@ -7,16 +7,11 @@ import VolEqCore
 @MainActor
 protocol AudioCaptureLifecycleObserving: AnyObject {
     func lifecycleDidPublish(_ snapshot: AudioCaptureLifecycleSnapshot)
-    func lifecycleDidCompleteTeardown(_ report: AudioCaptureTeardownReport)
     func lifecycleDidRefreshProcesses(
         _ processes: [AudioProcess],
         selectedProcessID: AudioObjectID?
     )
     func lifecycleDidRestoreIntent(_ intent: CaptureIntent)
-}
-
-extension AudioCaptureLifecycleObserving {
-    func lifecycleDidCompleteTeardown(_ report: AudioCaptureTeardownReport) {}
 }
 
 @MainActor
@@ -50,9 +45,11 @@ final class AudioCaptureLifecycleCoordinator {
         captureRuntime = AudioCaptureRuntime(
             pipelineBuilder: dependencies.pipelineBuilder,
             healthMonitorBuilder: dependencies.callbackHealthMonitorBuilder,
-            verificationProbeBuilder:
-                dependencies.livenessVerificationProbeBuilder,
-            diagnostics: dependencies.livenessDiagnostics
+            playbackActivityProbeBuilder:
+                dependencies.playbackActivityProbeBuilder,
+            livenessPolicy: dependencies.livenessPolicy,
+            livenessUptimeNanoseconds:
+                dependencies.livenessUptimeNanoseconds
         )
         routeMonitorBootstrap.start { [weak self] in
             guard let self else { throw CancellationError() }
@@ -185,33 +182,6 @@ final class AudioCaptureLifecycleCoordinator {
         scheduleRecovery(intent: reducedIntent, reason: .userRetry)
     }
 
-    func requestLivenessVerification() -> Bool {
-        guard case .active = phase else { return false }
-        return captureRuntime.requestLivenessVerification(reason: "userRequested")
-    }
-
-    func beginControlledLivenessFailureTest() -> Bool {
-        guard case .active = phase else { return false }
-        return captureRuntime.beginControlledLivenessFailureTest()
-    }
-
-    func cancelControlledLivenessFailureTest() {
-        captureRuntime.cancelControlledLivenessFailureTest()
-    }
-
-    func reconnect() -> Bool {
-        guard case let .recover(intent, reason) = CaptureLifecycleReducer.reduce(
-            phase: phase,
-            event: .userReconnectRequested
-        ) else { return false }
-        _ = apply(
-            event: .userReconnectRequested,
-            status: "Reconnecting Leveling — original audio is restored while VolEq rebuilds the captured-audio path."
-        )
-        beginAutomaticRecovery(intent: intent, reason: reason)
-        return true
-    }
-
     func stop() {
         requestStop(event: .stop)
     }
@@ -326,8 +296,7 @@ final class AudioCaptureLifecycleCoordinator {
     private func beginSafeStart(
         intent: CaptureIntent,
         isRecovery: Bool,
-        recoverySourceIntent: CaptureIntent?,
-        recoveryReason: AudioRecoveryReason?
+        recoverySourceIntent: CaptureIntent?
     ) {
         guard canBeginOperation else { return }
         cancelProcessRefreshWork()
@@ -406,8 +375,7 @@ final class AudioCaptureLifecycleCoordinator {
             await startPipeline(
                 prepared,
                 generation: operationGeneration,
-                isRecovery: isRecovery,
-                recoveryReason: recoveryReason
+                isRecovery: isRecovery
             )
             if isCurrent(operationGeneration) { transitionTask = nil }
         }
@@ -416,8 +384,7 @@ final class AudioCaptureLifecycleCoordinator {
     private func startPipeline(
         _ preparedRequest: PreparedCaptureRequest,
         generation operationGeneration: UInt64,
-        isRecovery: Bool,
-        recoveryReason: AudioRecoveryReason?
+        isRecovery: Bool
     ) async {
         let request = resumableIntent.map {
             preparedRequest.replacingIntent($0)
@@ -460,7 +427,7 @@ final class AudioCaptureLifecycleCoordinator {
             },
             automaticLivenessRecoveryEnabled:
                 request.intent.mode == .system
-                    && dependencies.livenessVerificationProbeBuilder != nil,
+                    && dependencies.playbackActivityProbeBuilder != nil,
             resetAutomaticRecoveryCircuitBreaker: !isRecovery,
             runningStatus: status
         )
@@ -572,8 +539,7 @@ final class AudioCaptureLifecycleCoordinator {
                 beginSafeStart(
                     intent: restoredIntent,
                     isRecovery: true,
-                    recoverySourceIntent: currentIntent,
-                    recoveryReason: currentReason
+                    recoverySourceIntent: currentIntent
                 )
             } catch is CancellationError {
                 return
@@ -644,8 +610,7 @@ final class AudioCaptureLifecycleCoordinator {
                 beginSafeStart(
                     intent: intent,
                     isRecovery: false,
-                    recoverySourceIntent: nil,
-                    recoveryReason: nil
+                    recoverySourceIntent: nil
                 )
             } catch {
                 guard isCurrent(operationGeneration) else { return }
@@ -812,7 +777,6 @@ final class AudioCaptureLifecycleCoordinator {
             guard let self else { return }
             let report = await teardownOwnedResources()
             guard operationGeneration == generation else { return }
-            observer?.lifecycleDidCompleteTeardown(report)
             transitionTask = nil
             guard report.permitsReplacementPipeline else {
                 applyTeardownFailure()

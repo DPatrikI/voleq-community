@@ -35,8 +35,8 @@ Recording prompt.
 - Prevents music and unrelated sounds from receiving quiet-speech gain.
 - Applies automatic mild noise suppression when speech and background noise are
   both detected.
-- Recovers conservatively across output changes, full system sleep, and stalled
-  audio callbacks without claiming an unsafe path is active.
+- Recovers conservatively across output changes, full system sleep, stalled
+  audio callbacks, and independently confirmed stale device-wide capture.
 - Offers native window and menu-bar presentations.
 
 ## Local audio and update privacy

@@ -10,20 +10,18 @@ import VolEqSpeech
 private let callbackTimingUnavailable = OSStatus(bitPattern: 0x5643_544D) // 'VCTM'
 let speechAnalysisFailed = OSStatus(bitPattern: 0x5653_5048) // 'VSPH'
 
-struct AudioIOCallbackMetadata {
+struct AudioCaptureLivenessMetadata {
     let inputFrameCount: Int
     let outputFrameCount: Int
     let capturedPeak: Float
     let flags: UInt32
-    let path: UInt32
-    let outcome: UInt32
-    let status: Int32
 }
 
 private struct CapturedInputStatistics {
     let peak: Float
     let hasSamples: Bool
     let containsNonfiniteSample: Bool
+    let hasCompleteChannelData: Bool
 }
 
 /// Owns the direct and converted processing paths for one active audio route.
@@ -39,6 +37,7 @@ final class AudioIOProcessor {
     let conversionProcessingLatencyFrameCount: Int
 
     private let directDynamics: DynamicsProcessor
+    private let inputChannelCount: UInt32
     private let conversionDynamics: DynamicsProcessor
     private let directContentAnalyzer: (any AudioContentAnalyzing)?
     private let conversionContentAnalyzer: (any AudioContentAnalyzing)?
@@ -71,6 +70,7 @@ final class AudioIOProcessor {
     ) throws {
         inputSampleRate = inputFormat.mSampleRate
         outputSampleRate = outputFormat.mSampleRate
+        inputChannelCount = inputFormat.mChannelsPerFrame
         if speechAwarenessEnabled {
             // Reject both possible processing clocks on the control thread
             // before analysis, conversion, or callback resources exist.
@@ -258,12 +258,12 @@ final class AudioIOProcessor {
         )
     }
 
-    func processWithDiagnostics(
+    func processWithLivenessObservation(
         input: UnsafePointer<AudioBufferList>,
         inputTime: AudioTimeStamp? = nil,
         output: UnsafeMutablePointer<AudioBufferList>,
         outputTime: AudioTimeStamp? = nil
-    ) -> AudioIOCallbackMetadata {
+    ) -> AudioCaptureLivenessMetadata {
         process(
             input: input,
             inputTime: inputTime,
@@ -273,51 +273,28 @@ final class AudioIOProcessor {
         )
     }
 
-    /// Diagnostic-build fault injection. The caller gates this with a
-    /// preallocated atomic flag; this method performs only bounded callback
-    /// work and deliberately emits no captured samples.
-    func processSimulatedUnusableCapture(
-        input: UnsafePointer<AudioBufferList>,
-        output: UnsafeMutablePointer<AudioBufferList>
-    ) -> AudioIOCallbackMetadata {
-        let inputFrameCount = Self.minimumAvailableFrameCount(in: input)
-        let outputFrameCount = Self.minimumAvailableFrameCount(in: output)
-        Self.clear(output: output)
-        return callbackMetadata(
-            inputFrameCount: inputFrameCount,
-            outputFrameCount: outputFrameCount,
-            inputStatistics: CapturedInputStatistics(
-                peak: 0,
-                hasSamples: inputFrameCount > 0,
-                containsNonfiniteSample: false
-            ),
-            path: selectedPath,
-            outcome: 4,
-            status: noErr,
-            collected: true
-        )
-    }
-
     private func process(
         input: UnsafePointer<AudioBufferList>,
         inputTime: AudioTimeStamp?,
         output: UnsafeMutablePointer<AudioBufferList>,
         outputTime: AudioTimeStamp?,
         collectInputStatistics: Bool
-    ) -> AudioIOCallbackMetadata {
+    ) -> AudioCaptureLivenessMetadata {
         let inputFrameCount = Self.minimumAvailableFrameCount(in: input)
         let outputFrameCount = Self.minimumAvailableFrameCount(in: output)
         let inputStatistics: CapturedInputStatistics
         if collectInputStatistics {
             inputStatistics = Self.capturedInputStatistics(
                 in: input,
-                frameCount: inputFrameCount
+                frameCount: inputFrameCount,
+                expectedChannelCount: inputChannelCount
             )
         } else {
             inputStatistics = CapturedInputStatistics(
                 peak: 0,
                 hasSamples: false,
-                containsNonfiniteSample: false
+                containsNonfiniteSample: false,
+                hasCompleteChannelData: false
             )
         }
         guard outputFrameCount > 0 else {
@@ -326,8 +303,6 @@ final class AudioIOProcessor {
                 outputFrameCount: outputFrameCount,
                 inputStatistics: inputStatistics,
                 path: selectedPath,
-                outcome: 1,
-                status: noErr,
                 collected: collectInputStatistics
             )
         }
@@ -338,8 +313,6 @@ final class AudioIOProcessor {
                 outputFrameCount: outputFrameCount,
                 inputStatistics: inputStatistics,
                 path: selectedPath,
-                outcome: 2,
-                status: noErr,
                 collected: collectInputStatistics
             )
         }
@@ -361,8 +334,6 @@ final class AudioIOProcessor {
                     outputFrameCount: outputFrameCount,
                     inputStatistics: inputStatistics,
                     path: .directAggregateClock,
-                    outcome: 5,
-                    status: speechAnalysisFailed,
                     collected: collectInputStatistics
                 )
             }
@@ -371,8 +342,6 @@ final class AudioIOProcessor {
                 outputFrameCount: outputFrameCount,
                 inputStatistics: inputStatistics,
                 path: .directAggregateClock,
-                outcome: 4,
-                status: noErr,
                 collected: collectInputStatistics
             )
         }
@@ -389,8 +358,6 @@ final class AudioIOProcessor {
                     outputFrameCount: outputFrameCount,
                     inputStatistics: inputStatistics,
                     path: nil,
-                    outcome: 5,
-                    status: callbackTimingUnavailable,
                     collected: collectInputStatistics
                 )
             }
@@ -409,8 +376,6 @@ final class AudioIOProcessor {
                     outputFrameCount: outputFrameCount,
                     inputStatistics: inputStatistics,
                     path: nil,
-                    outcome: 3,
-                    status: noErr,
                     collected: collectInputStatistics
                 )
             case let .resolved(resolvedPath):
@@ -424,8 +389,6 @@ final class AudioIOProcessor {
                     outputFrameCount: outputFrameCount,
                     inputStatistics: inputStatistics,
                     path: nil,
-                    outcome: 5,
-                    status: callbackTimingUnavailable,
                     collected: collectInputStatistics
                 )
             }
@@ -449,8 +412,6 @@ final class AudioIOProcessor {
                     outputFrameCount: outputFrameCount,
                     inputStatistics: inputStatistics,
                     path: path,
-                    outcome: 5,
-                    status: speechAnalysisFailed,
                     collected: collectInputStatistics
                 )
             }
@@ -459,8 +420,6 @@ final class AudioIOProcessor {
                 outputFrameCount: outputFrameCount,
                 inputStatistics: inputStatistics,
                 path: path,
-                outcome: 4,
-                status: noErr,
                 collected: collectInputStatistics
             )
         }
@@ -477,8 +436,6 @@ final class AudioIOProcessor {
                 outputFrameCount: outputFrameCount,
                 inputStatistics: inputStatistics,
                 path: path,
-                outcome: 5,
-                status: speechAnalysisFailed,
                 collected: collectInputStatistics
             )
         }
@@ -491,8 +448,6 @@ final class AudioIOProcessor {
             outputFrameCount: outputFrameCount,
             inputStatistics: inputStatistics,
             path: path,
-            outcome: result.errorStatus == nil ? 4 : 5,
-            status: result.errorStatus ?? noErr,
             collected: collectInputStatistics
         )
     }
@@ -502,50 +457,40 @@ final class AudioIOProcessor {
         outputFrameCount: Int,
         inputStatistics: CapturedInputStatistics,
         path: AudioSampleRatePath?,
-        outcome: UInt32,
-        status: OSStatus,
         collected: Bool
-    ) -> AudioIOCallbackMetadata {
+    ) -> AudioCaptureLivenessMetadata {
         var flags: UInt32 = 0
         if outputFrameCount > 0 {
-            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_OUTPUT_REQUEST_ACTIVE)
+            flags |= UInt32(VOLEQ_LIVENESS_FLAG_OUTPUT_REQUEST_ACTIVE)
         }
         if inputFrameCount == 0 {
-            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_NO_CAPTURED_FRAMES)
+            flags |= UInt32(VOLEQ_LIVENESS_FLAG_NO_CAPTURED_FRAMES)
         }
         if collected,
            inputStatistics.hasSamples,
            !inputStatistics.containsNonfiniteSample,
            inputStatistics.peak == 0 {
-            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_ALL_ZERO)
+            flags |= UInt32(VOLEQ_LIVENESS_FLAG_ALL_ZERO)
         }
         if inputStatistics.containsNonfiniteSample {
-            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_NONFINITE_INPUT)
+            flags |= UInt32(VOLEQ_LIVENESS_FLAG_NONFINITE_INPUT)
         }
         if inputFrameCount > 0,
-           Self.isPartialDelivery(
+           (!inputStatistics.hasCompleteChannelData
+            || Self.isPartialDelivery(
                inputFrameCount: inputFrameCount,
                outputFrameCount: outputFrameCount,
                inputSampleRate: inputSampleRate,
                outputSampleRate: outputSampleRate,
                path: path
-           ) {
-            flags |= UInt32(VOLEQ_DIAGNOSTIC_FLAG_PARTIAL_DELIVERY)
+           )) {
+            flags |= UInt32(VOLEQ_LIVENESS_FLAG_PARTIAL_DELIVERY)
         }
-        let pathValue: UInt32
-        switch path {
-        case .directAggregateClock: pathValue = 1
-        case .sampleRateConverter: pathValue = 2
-        case nil: pathValue = 0
-        }
-        return AudioIOCallbackMetadata(
+        return AudioCaptureLivenessMetadata(
             inputFrameCount: inputFrameCount,
             outputFrameCount: outputFrameCount,
             capturedPeak: inputStatistics.peak,
-            flags: flags,
-            path: pathValue,
-            outcome: outcome,
-            status: status
+            flags: flags
         )
     }
 
@@ -562,13 +507,13 @@ final class AudioIOProcessor {
            inputSampleRate.isFinite,
            outputSampleRate.isFinite,
            outputSampleRate > 0 {
-            expectedInputFrameCount = Int(ceil(
+            expectedInputFrameCount = Int(floor(
                 Double(outputFrameCount) * inputSampleRate / outputSampleRate
             ))
         } else {
             expectedInputFrameCount = outputFrameCount
         }
-        return inputFrameCount + 1 < expectedInputFrameCount
+        return inputFrameCount < expectedInputFrameCount
     }
 
     private func reportConversionFailureIfNeeded(_ status: OSStatus) {
@@ -611,13 +556,15 @@ final class AudioIOProcessor {
 
     private static func capturedInputStatistics(
         in list: UnsafePointer<AudioBufferList>,
-        frameCount: Int
+        frameCount: Int,
+        expectedChannelCount: UInt32
     ) -> CapturedInputStatistics {
         guard frameCount > 0 else {
             return CapturedInputStatistics(
                 peak: 0,
                 hasSamples: false,
-                containsNonfiniteSample: false
+                containsNonfiniteSample: false,
+                hasCompleteChannelData: false
             )
         }
         let buffers = UnsafeMutableAudioBufferListPointer(
@@ -626,8 +573,10 @@ final class AudioIOProcessor {
         var peak: Float = 0
         var hasSamples = false
         var containsNonfiniteSample = false
+        var availableChannelCount: UInt32 = 0
         for buffer in buffers {
             guard let data = buffer.mData else { continue }
+            availableChannelCount &+= buffer.mNumberChannels
             let sampleCount = frameCount * Int(buffer.mNumberChannels)
             let samples = data.assumingMemoryBound(to: Float.self)
             for index in 0..<sampleCount {
@@ -643,7 +592,9 @@ final class AudioIOProcessor {
         return CapturedInputStatistics(
             peak: peak,
             hasSamples: hasSamples,
-            containsNonfiniteSample: containsNonfiniteSample
+            containsNonfiniteSample: containsNonfiniteSample,
+            hasCompleteChannelData:
+                availableChannelCount == expectedChannelCount
         )
     }
 

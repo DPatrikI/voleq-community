@@ -4,55 +4,47 @@ import CoreAudio
 import CVolEqRealtime
 import Foundation
 
-enum AudioLivenessVerificationOutcome: Equatable, Sendable {
+enum AudioPlaybackActivityOutcome: Equatable, Sendable {
     case signalDetected(qualifyingCallbackCount: UInt32)
-    case noSignal
     case malformedInput
     case cancelled
     case coreAudioFailure(operation: String, status: OSStatus)
     case cleanupFailed([AudioCaptureTeardownStep])
 }
 
-enum AudioLivenessVerificationMode: Equatable, Sendable {
-    case bounded(timeoutNanoseconds: UInt64)
-    case untilSignalOrCancelled
-}
-
-struct AudioLivenessVerificationConfiguration: Equatable, Sendable {
+struct AudioPlaybackActivityConfiguration: Equatable, Sendable {
     let captureTarget: AudioCaptureTarget
     let outputDeviceUID: String
 }
 
-protocol AudioLivenessVerificationProbing: AnyObject, Sendable {
-    func verify(
-        mode: AudioLivenessVerificationMode
-    ) async -> AudioLivenessVerificationOutcome
+protocol AudioPlaybackActivityProbing: AnyObject, Sendable {
+    func observeUntilSignalOrCancelled() async -> AudioPlaybackActivityOutcome
     func cancel()
 }
 
-protocol AudioLivenessVerificationProbeBuilding: Sendable {
+protocol AudioPlaybackActivityProbeBuilding: Sendable {
     func makeProbe(
-        configuration: AudioLivenessVerificationConfiguration
-    ) throws -> any AudioLivenessVerificationProbing
+        configuration: AudioPlaybackActivityConfiguration
+    ) throws -> any AudioPlaybackActivityProbing
 }
 
 @available(macOS 14.2, *)
-struct CoreAudioLivenessVerificationProbeBuilder:
-    AudioLivenessVerificationProbeBuilding {
+struct CoreAudioPlaybackActivityProbeBuilder:
+    AudioPlaybackActivityProbeBuilding {
     func makeProbe(
-        configuration: AudioLivenessVerificationConfiguration
-    ) throws -> any AudioLivenessVerificationProbing {
-        try CoreAudioLivenessVerificationProbe(configuration: configuration)
+        configuration: AudioPlaybackActivityConfiguration
+    ) throws -> any AudioPlaybackActivityProbing {
+        try CoreAudioPlaybackActivityProbe(configuration: configuration)
     }
 }
 
-final class AudioSignalLatch: @unchecked Sendable {
+final class AudioPlaybackSignalLatch: @unchecked Sendable {
     private(set) var state: OpaquePointer?
 
     init() throws {
         guard let state = voleq_realtime_signal_latch_create() else {
             throw VolEqError.missingValue(
-                "VolEq could not allocate its audio-liveness verification state."
+                "VolEq could not allocate playback activity state."
             )
         }
         self.state = state
@@ -84,7 +76,7 @@ final class AudioSignalLatch: @unchecked Sendable {
 #endif
 }
 
-private final class AudioLivenessProbeCancellation: @unchecked Sendable {
+private final class AudioPlaybackActivityCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
 
@@ -93,7 +85,7 @@ private final class AudioLivenessProbeCancellation: @unchecked Sendable {
     func cancel() { lock.withLock { cancelled = true } }
 }
 
-private final class AudioLivenessProbeStartStatus: @unchecked Sendable {
+private final class AudioPlaybackActivityStartStatus: @unchecked Sendable {
     private let lock = NSLock()
     private var value: OSStatus?
 
@@ -102,38 +94,39 @@ private final class AudioLivenessProbeStartStatus: @unchecked Sendable {
 }
 
 @available(macOS 14.2, *)
-final class CoreAudioLivenessVerificationProbe:
-    AudioLivenessVerificationProbing,
+final class CoreAudioPlaybackActivityProbe:
+    AudioPlaybackActivityProbing,
     @unchecked Sendable {
-    private let configuration: AudioLivenessVerificationConfiguration
+    private let configuration: AudioPlaybackActivityConfiguration
     private let operations: CoreAudioCapturePipelineOperations
     private let pollNanoseconds: UInt64
     private let lifecycleQueue: DispatchQueue
     private let startQueue: DispatchQueue
     private let ioQueue: DispatchQueue
-    private let cancellation = AudioLivenessProbeCancellation()
-    private let signalLatch: AudioSignalLatch
+    private let cancellation = AudioPlaybackActivityCancellation()
+    private let signalLatch: AudioPlaybackSignalLatch
     private let resources: CoreAudioCaptureResourceOwner
     private let prepareResourcesOverride: (() throws -> Void)?
     private var mustRetainSignalStateAfterCleanupFailure = false
 
     init(
-        configuration: AudioLivenessVerificationConfiguration,
+        configuration: AudioPlaybackActivityConfiguration,
         operations: CoreAudioCapturePipelineOperations = .live,
         pollNanoseconds: UInt64 = 20_000_000,
         prepareResourcesOverride: (() throws -> Void)? = nil,
         lifecycleQueue: DispatchQueue = DispatchQueue(
-            label: "com.patrikistvandoczy.voleq.diagnostics.liveness-probe-lifecycle",
+            label: "com.patrikistvandoczy.voleq.playback-activity.lifecycle",
             qos: .userInitiated
         ),
         startQueue: DispatchQueue = DispatchQueue(
-            label: "com.patrikistvandoczy.voleq.diagnostics.liveness-probe-start",
+            label: "com.patrikistvandoczy.voleq.playback-activity.start",
             qos: .userInitiated
         ),
         ioQueue: DispatchQueue = DispatchQueue(
-            label: "com.patrikistvandoczy.voleq.diagnostics.liveness-probe-io",
+            label: "com.patrikistvandoczy.voleq.playback-activity.io",
             qos: .userInteractive
-        )
+        ),
+        startShutdownWaitNanoseconds: UInt64 = 500_000_000
     ) throws {
         self.configuration = configuration
         self.operations = operations
@@ -142,16 +135,15 @@ final class CoreAudioLivenessVerificationProbe:
         self.lifecycleQueue = lifecycleQueue
         self.startQueue = startQueue
         self.ioQueue = ioQueue
-        signalLatch = try AudioSignalLatch()
+        signalLatch = try AudioPlaybackSignalLatch()
         resources = CoreAudioCaptureResourceOwner(
             operations: operations,
-            routeQueue: lifecycleQueue
+            routeQueue: lifecycleQueue,
+            startShutdownWaitNanoseconds: startShutdownWaitNanoseconds
         )
     }
 
-    func verify(
-        mode: AudioLivenessVerificationMode
-    ) async -> AudioLivenessVerificationOutcome {
+    func observeUntilSignalOrCancelled() async -> AudioPlaybackActivityOutcome {
         guard !cancellation.isCancelled, !Task.isCancelled else {
             return .cancelled
         }
@@ -170,12 +162,12 @@ final class CoreAudioLivenessVerificationProbe:
             )
         } catch {
             return await finish(outcome: .coreAudioFailure(
-                operation: "Prepare audio-liveness verification",
+                operation: "Prepare playback activity watcher",
                 status: kAudioHardwareUnspecifiedError
             ))
         }
 
-        let startStatus = AudioLivenessProbeStartStatus()
+        let startStatus = AudioPlaybackActivityStartStatus()
         let startTask = Task { [startQueue, resources] in
             await withCheckedContinuation { continuation in
                 startQueue.async {
@@ -185,12 +177,11 @@ final class CoreAudioLivenessVerificationProbe:
                 }
             }
         }
-        let startedAt = DispatchTime.now().uptimeNanoseconds
-        var outcome: AudioLivenessVerificationOutcome = .noSignal
+        var outcome: AudioPlaybackActivityOutcome = .cancelled
         while !cancellation.isCancelled, !Task.isCancelled {
             if let status = startStatus.current, status != noErr {
                 outcome = .coreAudioFailure(
-                    operation: "Start audio-liveness verification",
+                    operation: "Start playback activity watcher",
                     status: status
                 )
                 break
@@ -204,13 +195,6 @@ final class CoreAudioLivenessVerificationProbe:
                 outcome = .signalDetected(qualifyingCallbackCount: count)
                 break
             }
-            if case let .bounded(timeoutNanoseconds) = mode {
-                let now = DispatchTime.now().uptimeNanoseconds
-                if now >= startedAt, now - startedAt >= timeoutNanoseconds {
-                    outcome = .noSignal
-                    break
-                }
-            }
             do {
                 try await Task.sleep(nanoseconds: pollNanoseconds)
             } catch {
@@ -222,6 +206,12 @@ final class CoreAudioLivenessVerificationProbe:
             outcome = .cancelled
         }
         let finished = await finish(outcome: outcome)
+        if case .cleanupFailed = finished {
+            // A blocked HAL Start remains owned by its task and resource owner.
+            // Teardown has already bounded its wait and reported the retained
+            // graph, so do not turn that safe failure into an unbounded wait.
+            return finished
+        }
         _ = await startTask.value
         return finished
     }
@@ -237,12 +227,12 @@ final class CoreAudioLivenessVerificationProbe:
     private func prepareResources() throws {
         guard let signalState = signalLatch.state else {
             throw VolEqError.missingValue(
-                "Audio-liveness verification was cancelled before it started."
+                "Playback activity observation was cancelled before it started."
             )
         }
 
         let description = CATapDescription()
-        description.name = "VolEq Audio Liveness Verification"
+        description.name = "VolEq Playback Activity"
         description.isPrivate = true
         description.isMixdown = true
         description.isMono = false
@@ -262,15 +252,15 @@ final class CoreAudioLivenessVerificationProbe:
         var tapID = AudioObjectID(kAudioObjectUnknown)
         try requireNoErr(
             AudioHardwareCreateProcessTap(description, &tapID),
-            "Create unmuted audio-liveness verification tap"
+            "Create unmuted playback activity tap"
         )
         resources.didCreateTap(tapID)
 
         let tapUID = try readString(objectID: tapID, selector: kAudioTapPropertyUID)
         let aggregateDescription: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "VolEq Private Liveness Probe",
+            kAudioAggregateDeviceNameKey: "VolEq Private Playback Activity",
             kAudioAggregateDeviceUIDKey:
-                "com.patrikistvandoczy.voleq.community.liveness-probe.\(UUID().uuidString)",
+                "com.patrikistvandoczy.voleq.community.playback-activity.\(UUID().uuidString)",
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceTapAutoStartKey: false,
             kAudioAggregateDeviceTapListKey: [[
@@ -284,7 +274,7 @@ final class CoreAudioLivenessVerificationProbe:
                 aggregateDescription as CFDictionary,
                 &aggregateID
             ),
-            "Create private audio-liveness verification device"
+            "Create private playback activity device"
         )
         resources.didCreateAggregate(aggregateID)
 
@@ -295,7 +285,7 @@ final class CoreAudioLivenessVerificationProbe:
         )
         try validateCaptureAudioFormat(
             inputFormat,
-            label: "Audio-liveness verification"
+            label: "Playback activity"
         )
 
         var ioProcID: AudioDeviceIOProcID?
@@ -310,19 +300,19 @@ final class CoreAudioLivenessVerificationProbe:
                     inputData
                 )
             },
-            "Create audio-liveness verification callback"
+            "Create playback activity callback"
         )
         guard let ioProcID else {
             throw VolEqError.missingValue(
-                "Core Audio created no audio-liveness verification callback."
+                "Core Audio created no playback activity callback."
             )
         }
         resources.didCreateIOProc(ioProcID)
     }
 
     private func finish(
-        outcome: AudioLivenessVerificationOutcome
-    ) async -> AudioLivenessVerificationOutcome {
+        outcome: AudioPlaybackActivityOutcome
+    ) async -> AudioPlaybackActivityOutcome {
         let report = await withCheckedContinuation { continuation in
             lifecycleQueue.async { [resources] in
                 continuation.resume(returning: resources.teardown())

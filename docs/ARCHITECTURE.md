@@ -131,7 +131,7 @@ cannot publish selection or lifecycle results after either its request or the
 owning lifecycle generation becomes stale.
 The lifecycle coordinator owns the one first-use explanation decision and
 fresh PID-plus-bundle resolution after that explanation. `AudioCaptureRuntime` owns the active pipeline
-interface, initial callback gate, watchdog, diagnostics monitor, and retained
+interface, initial callback gate, watchdog, liveness monitor, and retained
 pipeline executors. Graph construction and teardown serialize on the lifecycle
 executor, while callback Start runs separately so Stop, sleep, or termination
 can take ownership even if Core Audio blocks Start. The runtime adopts the
@@ -144,16 +144,17 @@ boundary. These components leave the coordinator responsible for serialized
 lifecycle policy rather than resource implementation or copy construction.
 
 `AudioCaptureDependencies` composes typed process-catalog, preflight, pipeline,
-route-monitor, route-stability, callback-health, clock, and scheduling
-contracts. `.live` is the only production composition;
+route-monitor, route-stability, callback-health, playback-activity, clock, and
+scheduling contracts. `.live` is the only production composition;
 tests provide small fakes for the boundary they exercise. The façade contains
 no debug hooks, simulated resources, controller-capturing closures, or test
 recorders.
 
 The active muting and processing graph is owned only by
 `CoreAudioCapturePipeline`. It stages active-output listeners, the
-`.mutedWhenTapped` process tap, private aggregate, I/O proc, processor, and
-callback heartbeat. `start()` only starts the prepared callback. Idempotent
+`.mutedWhenTapped` process tap, private aggregate, I/O proc, processor, callback
+heartbeat, and preallocated liveness state. `start()` only starts the prepared
+callback. Idempotent
 `stop()` attempts listener removal independently, then I/O stop and destruction,
 aggregate destruction, and tap destruction in dependency order, returning an
 `AudioCaptureTeardownReport` for every unresolved step. Failed ancillary
@@ -193,8 +194,14 @@ one pending recheck, and every stability observation is raced against the
 remaining absolute deadline, so a slow or hung HAL read cannot extend the
 ten-second recovery window.
 `AudioCallbackHealthMonitor` owns initial callback progress and the single
-stall notification. These boundaries keep lifecycle policy independent of raw
-Core Audio construction and timing machinery.
+stall notification. `AudioCaptureLivenessMonitor` owns device-wide
+captured-delivery observation, independent playback-activity watcher ownership,
+and the automatic-recovery circuit breaker. `AudioCaptureProcessingMonitor`
+owns processor failures and one-time processing-path status publication. The
+lock-free callback primitives share one public C interface but are implemented
+in separate heartbeat, content-state, signal-latch, processor-publication, and
+liveness modules. These boundaries keep lifecycle policy independent of raw
+Core Audio construction, processing presentation, and callback machinery.
 
 Default-output monitoring is a startup prerequisite. An internal installing
 phase keeps commands non-ready while the serial executor registers the listener.
@@ -207,7 +214,7 @@ without installing a competing callback.
 `prepareForSystemSleep()` snapshots capture mode, processing settings, speech
 awareness, and the selected application's Core Audio object, PID, bundle ID,
 and display name whenever startup, recovery, or active leveling reflects user
-intent. It cancels startup, route, diagnostics, and watchdog work,
+intent. It cancels startup, route, playback-activity, and watchdog work,
 then removes active-output listeners and stops/destroys the I/O proc, aggregate,
 tap, and processors in the established order. `isRunning` becomes false
 immediately in a suspending phase while ownership remains retained until
@@ -256,7 +263,8 @@ does not claim restoration. Production code uses only public Core Audio APIs;
 focused tests drive typed protocols and resource owners directly rather than
 reaching through the façade.
 
-Wake, output-route, and callback-stall recovery use that same safe-start method;
+Wake, output-route, callback-stall, and confirmed stale-capture recovery use
+that same safe-start method;
 there is no independent muting rebuild path. Recovery stays non-Active through
 route readiness, process restoration, preflight, and pipeline construction. The
 replacement graph is reported Active only after `AudioDeviceStart` and observed
@@ -272,6 +280,21 @@ including callbacks containing silence, is healthy; two seconds without
 progress immediately leaves Active, tears down the muting graph, and schedules
 one bounded recovery attempt. Watchdog accounting is disarmed during deliberate
 teardown, suspension, and route recovery.
+
+Each device-wide processing graph also owns a fixed-capacity
+`AudioCaptureLivenessState`. The callback publishes only its sequence, captured
+and requested frame counts, aggregate peak, and delivery flags into a
+single-producer C11-atomic ring allocated before `AudioDeviceStart`. The
+control-thread liveness monitor drains it every 100 ms. After two seconds of
+progressing, full-frame exact-zero capture, the monitor starts a separate
+unmuted input-only Core Audio watcher and keeps it active through the silent
+period. Two qualifying watcher callbacks begin a 300 ms confirmation window;
+a newer exact-zero main callback then schedules the shared safe recovery path.
+After one recovery, another remains blocked until five continuous seconds of
+healthy nonzero delivery reset the circuit breaker. Watcher cancellation and Core Audio cleanup
+complete before Stop, sleep, route reconstruction, termination, or another
+graph start proceeds; unresolved ownership retains the existing Quit-required
+safety state.
 
 Within the callback pipeline, `AudioIOProcessor` owns the prepared direct and
 converted DSP paths and selects exactly one after `AudioCallbackCadenceAnalyzer`

@@ -3,7 +3,6 @@
 import AppKit
 import Combine
 import SwiftUI
-import UniformTypeIdentifiers
 import VolEqMacAudio
 
 enum MacActivationPolicyTransition {
@@ -42,8 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isPresentingUpdateResult = false
     private var isAwaitingAudioTermination = false
     private var didCompleteAudioTermination = false
-    private var diagnosticTestSource: Process?
-    private var diagnosticControlledTestTask: Task<Void, Never>?
 
     private let applicationModel: VolEqApplicationModel
 
@@ -133,12 +130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workspaceLifecycle.start()
 
         didFinishLaunching = true
-#if !VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
         Task { @MainActor [weak self] in
             await Task.yield()
             self?.applicationModel.updates.applicationDidBecomeReady()
         }
-#endif
     }
 
     func startAudioRuntimeAnnouncements() {
@@ -196,19 +191,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor [weak self, weak sender] in
             guard let self else { return }
             await applicationModel.audio.prepareForApplicationTermination()
-            let cleanupComplete: Bool
-            if case .actionRequired(.cleanupFailed) =
-                applicationModel.audio.systemAudioAccessState {
-                cleanupComplete = false
-            } else {
-                cleanupComplete = true
-            }
-            await applicationModel.diagnostics?.finalizeAndWait(
-                reason: cleanupComplete
-                    ? "Diagnostic application terminated after audio cleanup."
-                    : "Diagnostic application terminated with incomplete Core Audio cleanup.",
-                cleanupComplete: cleanupComplete
-            )
             didCompleteAudioTermination = true
             isAwaitingAudioTermination = false
             if let sender { terminationReply(sender, true) }
@@ -217,19 +199,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
-        diagnosticControlledTestTask?.cancel()
-        diagnosticControlledTestTask = nil
-        diagnosticTestSource?.terminate()
-        diagnosticTestSource = nil
-#endif
         applicationModel.updates.applicationWillTerminate()
         if !didCompleteAudioTermination {
             applicationModel.audio.stop()
-            applicationModel.diagnostics?.finalize(
-                reason: "Diagnostic application terminated before asynchronous cleanup completed.",
-                cleanupComplete: false
-            )
         }
     }
 
@@ -334,17 +306,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)
-#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
-        window.title = "VolEq Audio Liveness Diagnostic"
-        window.setContentSize(NSSize(width: 548, height: 700))
-        window.contentMinSize = NSSize(width: 548, height: 640)
-#else
         window.title = "VolEq"
-        window.setContentSize(NSSize(width: 548, height: 620))
-        window.contentMinSize = NSSize(width: 548, height: 560)
-#endif
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 548, height: 620))
+        window.contentMinSize = NSSize(width: 548, height: 560)
         window.tabbingMode = .disallowed
         window.center()
         return NSWindowController(window: window)
@@ -358,11 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)
-#if VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC
-        window.title = "VolEq Audio Liveness Diagnostic Settings"
-#else
         window.title = "VolEq Settings"
-#endif
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 560, height: 480))
@@ -376,238 +338,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ApplicationShellActions(
             updates: applicationModel.updates,
             openSettings: { [weak self] in self?.showSettings() },
-            quit: { NSApp.terminate(nil) },
-            exportDiagnostics: { [weak self] in
-                self?.exportDiagnosticReport()
-            },
-            clearDiagnostics: { [weak self] in
-                self?.confirmDiagnosticHistoryClear()
-            },
-            verifyAudio: { [weak self] in
-                self?.verifyAudioLivenessAndReconnect()
-            },
-            reconnectAudio: { [weak self] in
-                self?.reconnectDiagnosticAudio()
-            },
-            runControlledTest: { [weak self] in
-                self?.confirmControlledLivenessRecoveryTest()
-            }
+            quit: { NSApp.terminate(nil) }
         )
-    }
-
-    func verifyAudioLivenessAndReconnect() {
-        guard applicationModel.audio.verifyAndReconnectIfNeeded() else {
-            presentDiagnosticResult(
-                title: "Verification Not Started",
-                message: applicationModel.audio.isRunning
-                    ? "Captured audio is currently available, or another verification is already running. If sound should be playing but remains absent, use Reconnect Audio."
-                    : "Start Leveling before verifying the captured-audio path.",
-                warning: true
-            )
-            return
-        }
-    }
-
-    func reconnectDiagnosticAudio() {
-        guard applicationModel.audio.reconnectAudio() else {
-            presentDiagnosticResult(
-                title: "Reconnect Unavailable",
-                message: "Reconnect Audio is available while Leveling is Active.",
-                warning: true
-            )
-            return
-        }
-    }
-
-    func confirmControlledLivenessRecoveryTest() {
-        guard applicationModel.audio.isRunning,
-              applicationModel.audio.mode == .system
-        else {
-            presentDiagnosticResult(
-                title: "Use Active Device-wide Leveling",
-                message: "The controlled test source is intentionally separate from VolEq, so this test requires Device-wide mode with Leveling Active.",
-                warning: true
-            )
-            return
-        }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Run Controlled Recovery Test?"
-        alert.informativeText = "The diagnostic will simulate zero-filled capture and keep an independent metadata-only watcher in genuine silence for six seconds. A quiet synthetic tone will then play from a separate local process. VolEq should confirm the stale main path and reconnect once. No audio samples are stored."
-        alert.addButton(withTitle: "Run Test")
-        let cancel = alert.addButton(withTitle: "Cancel")
-        cancel.keyEquivalent = "\u{1b}"
-        present(alert) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            self?.runControlledLivenessRecoveryTest()
-        }
-    }
-
-    private func runControlledLivenessRecoveryTest() {
-        let helper = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Helpers/VolEqLivenessTestSource")
-        guard FileManager.default.isExecutableFile(atPath: helper.path) else {
-            presentDiagnosticResult(
-                title: "Test Source Missing",
-                message: "Rebuild the private audio-liveness diagnostic app; its synthetic test-source helper is unavailable.",
-                warning: true
-            )
-            return
-        }
-        diagnosticControlledTestTask?.cancel()
-        diagnosticControlledTestTask = nil
-        diagnosticTestSource?.terminate()
-        diagnosticTestSource = nil
-        applicationModel.audio.cancelControlledLivenessRecoveryTest()
-        guard applicationModel.audio.runControlledLivenessRecoveryTest() else {
-            presentDiagnosticResult(
-                title: "Controlled Test Didn’t Start",
-                message: "The device-wide audio pipeline was no longer Active or another verification was already running.",
-                warning: true
-            )
-            return
-        }
-        applicationModel.diagnostics?.recordRecoveryExperimentEvent(
-            kind: "controlledTestSilentSentinelPeriodBegan",
-            reason: "The main path was fault-injected to exact zero before any independent test signal existed."
-        )
-        diagnosticControlledTestTask = Task { @MainActor [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: 6_000_000_000)
-            } catch {
-                return
-            }
-            guard let self, applicationModel.audio.isRunning,
-                  applicationModel.audio.mode == .system
-            else { return }
-            diagnosticControlledTestTask = nil
-            startControlledTestSource(at: helper)
-        }
-    }
-
-    private func startControlledTestSource(at helper: URL) {
-        let process = Process()
-        process.executableURL = helper
-        process.arguments = ["15"]
-        process.terminationHandler = { [weak self, weak process] _ in
-            Task { @MainActor in
-                guard let self, self.diagnosticTestSource === process else { return }
-                self.diagnosticTestSource = nil
-                self.applicationModel.diagnostics?.recordRecoveryExperimentEvent(
-                    kind: "controlledTestSourceEnded",
-                    reason: "Synthetic metadata-safe test source exited."
-                )
-            }
-        }
-        do {
-            try process.run()
-        } catch {
-            applicationModel.audio.cancelControlledLivenessRecoveryTest()
-            presentDiagnosticResult(
-                title: "Couldn’t Start Controlled Test Source",
-                message: error.localizedDescription,
-                warning: true
-            )
-            return
-        }
-        diagnosticTestSource = process
-        applicationModel.diagnostics?.recordRecoveryExperimentEvent(
-            kind: "controlledTestSourceStarted",
-            reason: "A separate process started a deterministic low-volume synthetic tone after the independent watcher remained silent beyond the old timeout; no samples are retained."
-        )
-    }
-
-    func exportDiagnosticReport() {
-        guard let diagnostics = applicationModel.diagnostics else {
-            presentDiagnosticResult(
-                title: "Diagnostics Unavailable",
-                message: "VolEq could not initialize its bounded diagnostic storage. Quit and relaunch the diagnostic app before testing.",
-                warning: true
-            )
-            return
-        }
-        let panel = NSSavePanel()
-        panel.title = "Export Audio-Liveness Diagnostic Report"
-        panel.nameFieldStringValue = "VolEq-Audio-Liveness-\(diagnostics.sessionIdentifier).json"
-        panel.allowedContentTypes = [.json]
-        panel.canCreateDirectories = true
-        let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard response == .OK, let destination = panel.url else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                do {
-                    let data = try await diagnostics.exportReportData()
-                    try await Task.detached(priority: .utility) {
-                        try data.write(to: destination, options: .atomic)
-                    }.value
-                    self.presentDiagnosticResult(
-                        title: "Diagnostic Report Exported",
-                        message: "Saved metadata-only report to \(destination.path)."
-                    )
-                } catch {
-                    self.presentDiagnosticResult(
-                        title: "Couldn’t Export Diagnostic Report",
-                        message: error.localizedDescription,
-                        warning: true
-                    )
-                }
-            }
-        }
-        if let parent = visibleParentWindow {
-            panel.beginSheetModal(for: parent, completionHandler: completion)
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-            panel.begin(completionHandler: completion)
-        }
-    }
-
-    func confirmDiagnosticHistoryClear() {
-        guard let diagnostics = applicationModel.diagnostics else {
-            presentDiagnosticResult(
-                title: "Diagnostics Unavailable",
-                message: "There is no local diagnostic journal to clear.",
-                warning: true
-            )
-            return
-        }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Clear Diagnostic Data?"
-        alert.informativeText = "This permanently removes VolEq’s bounded local metadata journal. It does not affect reports you already exported."
-        alert.addButton(withTitle: "Clear Diagnostic Data")
-        let cancel = alert.addButton(withTitle: "Cancel")
-        cancel.keyEquivalent = "\u{1b}"
-        present(alert) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            Task { @MainActor [weak self] in
-                do {
-                    try await diagnostics.clearStoredData()
-                    self?.presentDiagnosticResult(
-                        title: "Diagnostic Data Cleared",
-                        message: "A new metadata-only diagnostic session is now recording."
-                    )
-                } catch {
-                    self?.presentDiagnosticResult(
-                        title: "Couldn’t Clear Diagnostic Data",
-                        message: error.localizedDescription,
-                        warning: true
-                    )
-                }
-            }
-        }
-    }
-
-    private func presentDiagnosticResult(
-        title: String,
-        message: String,
-        warning: Bool = false
-    ) {
-        let alert = NSAlert()
-        alert.alertStyle = warning ? .warning : .informational
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        present(alert) { _ in }
     }
 
     private func presentAutomaticCheckConsent() {

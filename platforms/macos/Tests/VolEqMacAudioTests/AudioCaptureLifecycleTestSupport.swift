@@ -93,6 +93,7 @@ final class TestCapturePipeline: AudioCapturePipeline, @unchecked Sendable {
     private let lock = NSLock()
     let heartbeat: AudioCallbackHeartbeat
     let processor: AudioIOProcessor?
+    let playbackActivityConfiguration: AudioPlaybackActivityConfiguration?
     var runningStatusSuffix: String {
         get { lock.withLock { storedRunningStatusSuffix } }
         set { lock.withLock { storedRunningStatusSuffix = newValue } }
@@ -120,6 +121,11 @@ final class TestCapturePipeline: AudioCapturePipeline, @unchecked Sendable {
     var startCount: Int { lock.withLock { storedStartCount } }
     var stopCount: Int { lock.withLock { storedStopCount } }
     var settings: [LevelingSettings] { lock.withLock { storedSettings } }
+    var livenessDrainCount: Int { lock.withLock { storedLivenessDrainCount } }
+    var livenessObservation: AudioCaptureLivenessObservation? {
+        get { lock.withLock { storedLivenessObservation } }
+        set { lock.withLock { storedLivenessObservation = newValue } }
+    }
 
     private var storedRunningStatusSuffix = ""
     private var storedStartError: Error?
@@ -130,10 +136,20 @@ final class TestCapturePipeline: AudioCapturePipeline, @unchecked Sendable {
     private var storedStartCount = 0
     private var storedStopCount = 0
     private var storedSettings: [LevelingSettings] = []
+    private var storedLivenessObservation: AudioCaptureLivenessObservation?
+    private var storedLivenessSequence: UInt64 = 0
+    private var storedLivenessDrainCount = 0
 
-    init(processor: AudioIOProcessor? = nil) throws {
+    init(
+        processor: AudioIOProcessor? = nil,
+        playbackActivityConfiguration:
+            AudioPlaybackActivityConfiguration? = nil,
+        livenessObservation: AudioCaptureLivenessObservation? = nil
+    ) throws {
         heartbeat = try AudioCallbackHeartbeat()
         self.processor = processor
+        self.playbackActivityConfiguration = playbackActivityConfiguration
+        storedLivenessObservation = livenessObservation
     }
 
     func start() throws -> UInt64 {
@@ -159,6 +175,26 @@ final class TestCapturePipeline: AudioCapturePipeline, @unchecked Sendable {
 
     func updateSettings(_ settings: LevelingSettings) {
         lock.withLock { storedSettings.append(settings) }
+    }
+
+    func drainLivenessObservations() -> [AudioCaptureLivenessObservation] {
+        lock.withLock {
+            storedLivenessDrainCount += 1
+            guard let observation = storedLivenessObservation else { return [] }
+            storedLivenessSequence &+= 1
+            return [AudioCaptureLivenessObservation(
+                callbackSequence: storedLivenessSequence,
+                capturedFrameCount: observation.capturedFrameCount,
+                requestedOutputFrameCount:
+                    observation.requestedOutputFrameCount,
+                capturedPeak: observation.capturedPeak,
+                allZero: observation.allZero,
+                noCapturedFrames: observation.noCapturedFrames,
+                partialDelivery: observation.partialDelivery,
+                nonfiniteInput: observation.nonfiniteInput,
+                outputRequestActive: observation.outputRequestActive
+            )]
+        }
     }
 }
 
@@ -356,6 +392,12 @@ final class AudioCaptureTestRig {
     let routeMonitor = TestOutputRouteMonitor()
     let routeGate = TestRouteStabilityGate()
     let healthMonitors = TestCallbackHealthMonitorBuilder()
+    var playbackActivityProbeBuilder:
+        (any AudioPlaybackActivityProbeBuilding)?
+    var livenessPolicy = AudioCaptureLivenessPolicy.production
+    var livenessUptimeNanoseconds: @Sendable () -> UInt64 = {
+        DispatchTime.now().uptimeNanoseconds
+    }
     var permissionExplanation: @MainActor () async -> Bool = { true }
     var routeRecoveryDelayNanoseconds: UInt64 = 0
     var wakeRecoveryDelayNanoseconds: UInt64 = 0
@@ -372,7 +414,10 @@ final class AudioCaptureTestRig {
                 await self?.permissionExplanation() ?? false
             },
             routeRecoveryDelayNanoseconds: routeRecoveryDelayNanoseconds,
-            wakeRecoveryDelayNanoseconds: wakeRecoveryDelayNanoseconds
+            wakeRecoveryDelayNanoseconds: wakeRecoveryDelayNanoseconds,
+            playbackActivityProbeBuilder: playbackActivityProbeBuilder,
+            livenessPolicy: livenessPolicy,
+            livenessUptimeNanoseconds: livenessUptimeNanoseconds
         )
     }
 

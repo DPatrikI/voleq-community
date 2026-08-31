@@ -92,67 +92,44 @@ int32_t voleq_realtime_processor_take_failure(
     VolEqRealtimeProcessorPublication *publication
 );
 
-typedef struct VolEqRealtimeDiagnosticState VolEqRealtimeDiagnosticState;
+typedef struct VolEqRealtimeLivenessState VolEqRealtimeLivenessState;
 
 enum {
-    VOLEQ_DIAGNOSTIC_FLAG_ALL_ZERO = 1u << 0,
-    VOLEQ_DIAGNOSTIC_FLAG_NO_CAPTURED_FRAMES = 1u << 1,
-    VOLEQ_DIAGNOSTIC_FLAG_PARTIAL_DELIVERY = 1u << 2,
-    VOLEQ_DIAGNOSTIC_FLAG_NONFINITE_INPUT = 1u << 3,
-    VOLEQ_DIAGNOSTIC_FLAG_OUTPUT_REQUEST_ACTIVE = 1u << 4,
+    VOLEQ_LIVENESS_FLAG_ALL_ZERO = 1u << 0,
+    VOLEQ_LIVENESS_FLAG_NO_CAPTURED_FRAMES = 1u << 1,
+    VOLEQ_LIVENESS_FLAG_PARTIAL_DELIVERY = 1u << 2,
+    VOLEQ_LIVENESS_FLAG_NONFINITE_INPUT = 1u << 3,
+    VOLEQ_LIVENESS_FLAG_OUTPUT_REQUEST_ACTIVE = 1u << 4,
 };
 
 typedef struct {
     uint64_t sequence;
-    uint64_t callback_host_time;
     uint32_t captured_frame_count;
     uint32_t requested_output_frame_count;
     float captured_peak;
     uint32_t flags;
-    uint32_t zero_run_length;
-    uint32_t partial_run_length;
-    uint32_t processing_path;
-    uint32_t processing_outcome;
-    int32_t processing_status;
-} VolEqRealtimeDiagnosticRecord;
+} VolEqRealtimeLivenessRecord;
 
-VolEqRealtimeDiagnosticState *voleq_realtime_diagnostic_state_create(
+VolEqRealtimeLivenessState *voleq_realtime_liveness_state_create(
     size_t capacity
 );
 
-void voleq_realtime_diagnostic_state_destroy(
-    VolEqRealtimeDiagnosticState *state
+void voleq_realtime_liveness_state_destroy(
+    VolEqRealtimeLivenessState *state
 );
 
-void voleq_realtime_diagnostic_state_record(
-    VolEqRealtimeDiagnosticState *state,
-    uint64_t callback_host_time,
+void voleq_realtime_liveness_state_record(
+    VolEqRealtimeLivenessState *state,
     uint32_t captured_frame_count,
     uint32_t requested_output_frame_count,
     float captured_peak,
-    uint32_t flags,
-    uint32_t processing_path,
-    uint32_t processing_outcome,
-    int32_t processing_status
+    uint32_t flags
 );
 
-size_t voleq_realtime_diagnostic_state_read(
-    VolEqRealtimeDiagnosticState *state,
-    VolEqRealtimeDiagnosticRecord *records,
+size_t voleq_realtime_liveness_state_read(
+    VolEqRealtimeLivenessState *state,
+    VolEqRealtimeLivenessRecord *records,
     size_t maximum_record_count
-);
-
-uint64_t voleq_realtime_diagnostic_state_dropped_record_count(
-    const VolEqRealtimeDiagnosticState *state
-);
-
-void voleq_realtime_diagnostic_state_set_fault_injection_enabled(
-    VolEqRealtimeDiagnosticState *state,
-    bool enabled
-);
-
-bool voleq_realtime_diagnostic_state_fault_injection_enabled(
-    const VolEqRealtimeDiagnosticState *state
 );
 
 #endif

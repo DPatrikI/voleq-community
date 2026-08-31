@@ -76,7 +76,6 @@ enum AudioRecoveryReason: Equatable, Sendable {
     case systemWake
     case stalledCallbacks
     case userRetry
-    case userReconnect
     case confirmedUnusableCapture
 }
 

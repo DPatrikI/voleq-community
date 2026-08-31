@@ -26,28 +26,18 @@ public final class AudioCaptureController: ObservableObject {
     @Published public private(set) var status = "Choose an audio-producing app, then start."
 
     private let coordinator: AudioCaptureLifecycleCoordinator
-    private let diagnostics: (any AudioLivenessDiagnosticsRecording)?
-    private var diagnosticCaptureWasStarted = false
-    private var diagnosticCaptureCleanupComplete = true
 
     public convenience init(
-        permissionExplanationRequest: @escaping @MainActor () async -> Bool = { true },
-        audioLivenessDiagnostics: AudioLivenessDiagnostics? = nil
+        permissionExplanationRequest: @escaping @MainActor () async -> Bool = { true }
     ) {
         self.init(
             dependencies: .live(
-                permissionExplanationRequest: permissionExplanationRequest,
-                diagnostics: audioLivenessDiagnostics
-            ),
-            diagnostics: audioLivenessDiagnostics
+                permissionExplanationRequest: permissionExplanationRequest
+            )
         )
     }
 
-    init(
-        dependencies: AudioCaptureDependencies,
-        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil
-    ) {
-        self.diagnostics = diagnostics
+    init(dependencies: AudioCaptureDependencies) {
         coordinator = AudioCaptureLifecycleCoordinator(
             dependencies: dependencies
         )
@@ -79,25 +69,6 @@ public final class AudioCaptureController: ObservableObject {
 
     public func retryRecovery() {
         coordinator.retry(intent: captureIntent())
-    }
-
-    @discardableResult
-    public func verifyAndReconnectIfNeeded() -> Bool {
-        coordinator.requestLivenessVerification()
-    }
-
-    @discardableResult
-    public func runControlledLivenessRecoveryTest() -> Bool {
-        coordinator.beginControlledLivenessFailureTest()
-    }
-
-    public func cancelControlledLivenessRecoveryTest() {
-        coordinator.cancelControlledLivenessFailureTest()
-    }
-
-    @discardableResult
-    public func reconnectAudio() -> Bool {
-        coordinator.reconnect()
     }
 
     public var canRetryRecovery: Bool {
@@ -167,42 +138,6 @@ extension AudioCaptureController: AudioCaptureLifecycleObserving {
         runtimeState = state.runtimeState
         systemAudioAccessState = state.systemAudioAccessState
         status = state.status
-        diagnostics?.recordLifecycle(
-            activity: Self.diagnosticLifecycleName(snapshot.phase),
-            captureMode: mode.rawValue
-        )
-        switch snapshot.phase {
-        case .preparing, .active, .stopping, .suspending, .suspended,
-             .recovering:
-            if !diagnosticCaptureWasStarted {
-                diagnosticCaptureCleanupComplete = true
-            }
-            diagnosticCaptureWasStarted = true
-        case .stopped where diagnosticCaptureWasStarted:
-            diagnostics?.finalizeCaptureRun(
-                reason: diagnosticCaptureCleanupComplete
-                    ? "Audio capture stopped normally."
-                    : "The audio graph stopped, but one or more diagnostic route listeners remained quarantined.",
-                cleanupComplete: diagnosticCaptureCleanupComplete
-            )
-            diagnosticCaptureWasStarted = false
-            diagnosticCaptureCleanupComplete = true
-        case .cleanupFailed where diagnosticCaptureWasStarted:
-            diagnostics?.finalizeCaptureRun(
-                reason: "Core Audio cleanup remained incomplete; Quit is required.",
-                cleanupComplete: false
-            )
-            diagnosticCaptureWasStarted = false
-            diagnosticCaptureCleanupComplete = true
-        default:
-            break
-        }
-    }
-
-    func lifecycleDidCompleteTeardown(_ report: AudioCaptureTeardownReport) {
-        guard diagnosticCaptureWasStarted else { return }
-        diagnosticCaptureCleanupComplete =
-            diagnosticCaptureCleanupComplete && report.isComplete
     }
 
     func lifecycleDidRefreshProcesses(
@@ -211,38 +146,6 @@ extension AudioCaptureController: AudioCaptureLifecycleObserving {
     ) {
         self.processes = processes
         self.selectedProcessID = selectedProcessID
-    }
-
-    private static func diagnosticLifecycleName(
-        _ phase: CaptureLifecyclePhase
-    ) -> String {
-        switch phase {
-        case .stopped: "stopped"
-        case .explanationDeclined: "explanationDeclined"
-        case .ready: "ready"
-        case .installingRouteMonitor: "installingRouteMonitor"
-        case .explaining: "explainingPermission"
-        case .preparing: "preparing"
-        case .active: "active"
-        case .stopping: "stopping"
-        case .suspending: "suspending"
-        case .suspended: "suspended"
-        case let .recovering(_, reason):
-            switch reason {
-            case .outputRouteChanged: "recoveringOutputRouteChange"
-            case .systemWake: "recoveringSystemWake"
-            case .stalledCallbacks: "recoveringCallbackStall"
-            case .userRetry: "recoveringUserRetry"
-            case .userReconnect: "recoveringUserReconnect"
-            case .confirmedUnusableCapture: "recoveringConfirmedUnusableCapture"
-            }
-        case .recoveryFailed: "recoveryFailed"
-        case .processDiscoveryFailed: "processDiscoveryFailed"
-        case .routeMonitoringFailed: "routeMonitoringFailed"
-        case .failed: "failed"
-        case .verifiedFailure: "verifiedFailure"
-        case .cleanupFailed: "cleanupFailed"
-        }
     }
 
     func lifecycleDidRestoreIntent(_ intent: CaptureIntent) {

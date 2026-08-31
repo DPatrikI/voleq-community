@@ -11,7 +11,6 @@ CHECKSUMS="$RELEASE_DIRECTORY/SHA256SUMS.txt"
 NOTARIZATION_DIRECTORY="$RELEASE_DIRECTORY/notarization"
 OUTSIDE_FILE="$TEMPORARY_ROOT/outside.dmg"
 DEVELOPMENT_INFO_PLIST="$TEMPORARY_ROOT/Development-Info.plist"
-DIAGNOSTIC_INFO_PLIST="$TEMPORARY_ROOT/Diagnostic-Info.plist"
 TEST_COUNT=0
 
 cleanup() {
@@ -56,19 +55,6 @@ plutil -replace CFBundleIdentifier \
     -string "$VOLEQ_DEVELOPMENT_BUNDLE_IDENTIFIER" \
     "$DEVELOPMENT_INFO_PLIST"
 voleq_validate_product_plist "$DEVELOPMENT_INFO_PLIST" development
-cp "$INFO_PLIST" "$DIAGNOSTIC_INFO_PLIST"
-plutil -replace CFBundleDisplayName \
-    -string "$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_PRODUCT_NAME" \
-    "$DIAGNOSTIC_INFO_PLIST"
-plutil -replace CFBundleName \
-    -string "$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_PRODUCT_NAME" \
-    "$DIAGNOSTIC_INFO_PLIST"
-plutil -replace CFBundleIdentifier \
-    -string "$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_BUNDLE_IDENTIFIER" \
-    "$DIAGNOSTIC_INFO_PLIST"
-voleq_validate_product_plist \
-    "$DIAGNOSTIC_INFO_PLIST" \
-    audio-liveness-diagnostic
 plutil -replace CFBundleDisplayName \
     -string "VolEq Community Dev" \
     "$DEVELOPMENT_INFO_PLIST"
@@ -84,11 +70,33 @@ fi
     || { print -u2 -- "not ok - unexpected development app bundle"; exit 1; }
 [[ "$VOLEQ_COMMUNITY_ARTIFACT_PREFIX" == "VolEq-Community" ]] \
     || { print -u2 -- "not ok - unexpected Community artifact prefix"; exit 1; }
-[[ "$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_APP_BUNDLE" == "VolEq Audio Liveness Diagnostic.app" ]] \
-    || { print -u2 -- "not ok - unexpected diagnostic app bundle"; exit 1; }
-[[ "$VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC_BUNDLE_IDENTIFIER" != "$VOLEQ_RELEASE_BUNDLE_IDENTIFIER" ]] \
-    || { print -u2 -- "not ok - diagnostic identity matches release"; exit 1; }
-pass "validates release, development, diagnostic, and Community artifact naming"
+pass "validates release, development, and Community artifact naming"
+
+for removed_path in \
+    "$REPOSITORY_ROOT/scripts/build-macos-audio-liveness-diagnostic.sh" \
+    "$REPOSITORY_ROOT/tools/audio-liveness-test-source" \
+    "$REPOSITORY_ROOT/artifacts/diagnostics"
+do
+    [[ ! -e "$removed_path" ]] \
+        || { print -u2 -- "not ok - private diagnostic output remains: $removed_path"; exit 1; }
+done
+for diagnostic_key in VolEqDiagnosticVariant VolEqSourceCommit
+do
+    if plutil -extract "$diagnostic_key" raw -o - "$INFO_PLIST" \
+        >/dev/null 2>&1; then
+        print -u2 -- "not ok - public Info.plist contains $diagnostic_key"
+        exit 1
+    fi
+done
+if grep -R -E \
+    "VolEq Audio Liveness Diagnostic|Export Diagnostic Report|Clear Diagnostic Data|Run Controlled Recovery Test|Verify & Reconnect|Reconnect Audio|VolEqLivenessTestSource|VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC" \
+    "$REPOSITORY_ROOT/Package.swift" \
+    "$REPOSITORY_ROOT/apps/macos/community/Sources" \
+    "$REPOSITORY_ROOT/dev" >/dev/null; then
+    print -u2 -- "not ok - private diagnostic product surface remains"
+    exit 1
+fi
+pass "keeps the public application identity and product surface release-only"
 
 [[ "$RC_DMG_FILENAME" == "VolEq-Community-0.1.1-rc1-macOS-arm64.dmg" ]] \
     || { print -u2 -- "not ok - unexpected release-candidate DMG name"; exit 1; }

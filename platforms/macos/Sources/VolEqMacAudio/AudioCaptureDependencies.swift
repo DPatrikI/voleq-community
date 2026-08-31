@@ -26,9 +26,10 @@ struct AudioCaptureDependencies {
     let permissionExplanationRequest: @MainActor () async -> Bool
     let routeRecoveryDelayNanoseconds: UInt64
     let wakeRecoveryDelayNanoseconds: UInt64
-    let livenessVerificationProbeBuilder:
-        (any AudioLivenessVerificationProbeBuilding)?
-    let livenessDiagnostics: (any AudioLivenessDiagnosticsRecording)?
+    let playbackActivityProbeBuilder:
+        (any AudioPlaybackActivityProbeBuilding)?
+    let livenessPolicy: AudioCaptureLivenessPolicy
+    let livenessUptimeNanoseconds: @Sendable () -> UInt64
 
     init(
         processCatalog: any AudioProcessCatalog,
@@ -40,9 +41,12 @@ struct AudioCaptureDependencies {
         permissionExplanationRequest: @escaping @MainActor () async -> Bool,
         routeRecoveryDelayNanoseconds: UInt64,
         wakeRecoveryDelayNanoseconds: UInt64,
-        livenessVerificationProbeBuilder:
-            (any AudioLivenessVerificationProbeBuilding)? = nil,
-        livenessDiagnostics: (any AudioLivenessDiagnosticsRecording)? = nil
+        playbackActivityProbeBuilder:
+            (any AudioPlaybackActivityProbeBuilding)? = nil,
+        livenessPolicy: AudioCaptureLivenessPolicy = .production,
+        livenessUptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        }
     ) {
         self.processCatalog = processCatalog
         self.preflight = preflight
@@ -53,24 +57,22 @@ struct AudioCaptureDependencies {
         self.permissionExplanationRequest = permissionExplanationRequest
         self.routeRecoveryDelayNanoseconds = routeRecoveryDelayNanoseconds
         self.wakeRecoveryDelayNanoseconds = wakeRecoveryDelayNanoseconds
-        self.livenessVerificationProbeBuilder = livenessVerificationProbeBuilder
-        self.livenessDiagnostics = livenessDiagnostics
+        self.playbackActivityProbeBuilder = playbackActivityProbeBuilder
+        self.livenessPolicy = livenessPolicy
+        self.livenessUptimeNanoseconds = livenessUptimeNanoseconds
     }
 
     @available(macOS 14.2, *)
     @MainActor
     static func live(
-        permissionExplanationRequest: @escaping @MainActor () async -> Bool,
-        diagnostics: (any AudioLivenessDiagnosticsRecording)? = nil
+        permissionExplanationRequest: @escaping @MainActor () async -> Bool
     ) -> AudioCaptureDependencies {
         let clock = ContinuousAudioLifecycleClock()
         let scheduler = ContinuousAudioLifecycleScheduler()
         return AudioCaptureDependencies(
             processCatalog: CoreAudioProcessCatalog(),
             preflight: CoreAudioCapturePreflight(),
-            pipelineBuilder: CoreAudioCapturePipelineBuilder(
-                diagnostics: diagnostics
-            ),
+            pipelineBuilder: CoreAudioCapturePipelineBuilder(),
             routeMonitor: CoreAudioOutputRouteMonitor(),
             routeStabilityGate: AudioOutputRouteStabilityGate(
                 observer: CoreAudioOutputRouteObserver(),
@@ -86,10 +88,7 @@ struct AudioCaptureDependencies {
             permissionExplanationRequest: permissionExplanationRequest,
             routeRecoveryDelayNanoseconds: 350_000_000,
             wakeRecoveryDelayNanoseconds: 1_000_000_000,
-            livenessVerificationProbeBuilder: diagnostics == nil
-                ? nil
-                : CoreAudioLivenessVerificationProbeBuilder(),
-            livenessDiagnostics: diagnostics
+            playbackActivityProbeBuilder: CoreAudioPlaybackActivityProbeBuilder()
         )
     }
 }

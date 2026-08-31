@@ -60,6 +60,13 @@ No changes yet.
 - VolEq no longer reports Active until callback progress has begun, and a graph
   with no callback progress for two seconds is torn down instead of retaining a
   stale muting path.
+- Device-wide leveling now reconstructs the audio graph when an independent
+  playback check confirms that the active capture path is still delivering
+  exact-zero buffers after playback has resumed.
+- Bluetooth and output-route transitions now permit safe reconstruction after
+  the processing graph is gone even if an obsolete output listener remains.
+- Playback-activity watcher teardown now completes before another audio graph
+  is started during Stop, sleep, route changes, termination, or recovery.
 - Application capture after wake is restored only by PID plus bundle identity,
   or by one unique exact bundle match; missing or ambiguous targets stop safely
   instead of selecting an unrelated process.
