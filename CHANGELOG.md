@@ -8,7 +8,7 @@ their public interfaces as the supported platform set grows.
 
 No changes yet.
 
-## [0.1.1] - 2026-08-11
+## [0.1.1] - 2026-08-31
 
 ### Added
 
