@@ -64,14 +64,19 @@ private final class ControllableLivenessProbe:
     @unchecked Sendable {
     private let lock = NSLock()
     private let completesWhenCancelled: Bool
+    private let onCancel: () -> Void
     private var continuation:
         CheckedContinuation<AudioPlaybackActivityOutcome, Never>?
     private var pendingOutcome: AudioPlaybackActivityOutcome?
     private var storedVerifyCount = 0
     private var storedCancelCount = 0
 
-    init(completesWhenCancelled: Bool = true) {
+    init(
+        completesWhenCancelled: Bool = true,
+        onCancel: @escaping () -> Void = {}
+    ) {
         self.completesWhenCancelled = completesWhenCancelled
+        self.onCancel = onCancel
     }
 
     var verifyCount: Int { lock.withLock { storedVerifyCount } }
@@ -96,6 +101,7 @@ private final class ControllableLivenessProbe:
 
     func cancel() {
         lock.withLock { storedCancelCount += 1 }
+        onCancel()
         if completesWhenCancelled {
             complete(with: .cancelled)
         }
@@ -411,7 +417,13 @@ final class AudioLivenessRecoveryTests: AudioPipelineTestCase {
 
     func testNewZeroRunStartsAfterPreviousWatcherFinishesSlowCancellation() async throws {
         let clock = ManualLivenessClock()
-        let firstProbe = ControllableLivenessProbe(completesWhenCancelled: false)
+        let firstWatcherCancelled = expectation(
+            description: "first watcher cancellation"
+        )
+        let firstProbe = ControllableLivenessProbe(
+            completesWhenCancelled: false,
+            onCancel: { firstWatcherCancelled.fulfill() }
+        )
         let secondProbe = ControllableLivenessProbe()
         let builder = QueuedLivenessProbeBuilder(
             probes: [firstProbe, secondProbe]
@@ -438,9 +450,8 @@ final class AudioLivenessRecoveryTests: AudioPipelineTestCase {
         }
 
         pipeline.setObservation(nonzeroObservation)
-        try await waitForAudioCondition("first watcher cancellation") {
-            firstProbe.cancelCount == 1
-        }
+        await fulfillment(of: [firstWatcherCancelled], timeout: 2)
+        XCTAssertEqual(firstProbe.cancelCount, 1)
         pipeline.setObservation(exactZeroObservation)
         let newZeroDrain = pipeline.drainCount
         try await waitForAudioCondition("new zero run") {
