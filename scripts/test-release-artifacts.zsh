@@ -72,6 +72,32 @@ fi
     || { print -u2 -- "not ok - unexpected Community artifact prefix"; exit 1; }
 pass "validates release, development, and Community artifact naming"
 
+for removed_path in \
+    "$REPOSITORY_ROOT/scripts/build-macos-audio-liveness-diagnostic.sh" \
+    "$REPOSITORY_ROOT/tools/audio-liveness-test-source" \
+    "$REPOSITORY_ROOT/artifacts/diagnostics"
+do
+    [[ ! -e "$removed_path" ]] \
+        || { print -u2 -- "not ok - private diagnostic output remains: $removed_path"; exit 1; }
+done
+for diagnostic_key in VolEqDiagnosticVariant VolEqSourceCommit
+do
+    if plutil -extract "$diagnostic_key" raw -o - "$INFO_PLIST" \
+        >/dev/null 2>&1; then
+        print -u2 -- "not ok - public Info.plist contains $diagnostic_key"
+        exit 1
+    fi
+done
+if grep -R -E \
+    "VolEq Audio Liveness Diagnostic|Export Diagnostic Report|Clear Diagnostic Data|Run Controlled Recovery Test|Verify & Reconnect|Reconnect Audio|VolEqLivenessTestSource|VOLEQ_AUDIO_LIVENESS_DIAGNOSTIC" \
+    "$REPOSITORY_ROOT/Package.swift" \
+    "$REPOSITORY_ROOT/apps/macos/community/Sources" \
+    "$REPOSITORY_ROOT/dev" >/dev/null; then
+    print -u2 -- "not ok - private diagnostic product surface remains"
+    exit 1
+fi
+pass "keeps the public application identity and product surface release-only"
+
 [[ "$RC_DMG_FILENAME" == "VolEq-Community-0.1.1-rc1-macOS-arm64.dmg" ]] \
     || { print -u2 -- "not ok - unexpected release-candidate DMG name"; exit 1; }
 [[ "$FINAL_DMG_FILENAME" == "VolEq-Community-0.1.1-macOS-arm64.dmg" ]] \

@@ -26,6 +26,41 @@ struct AudioCaptureDependencies {
     let permissionExplanationRequest: @MainActor () async -> Bool
     let routeRecoveryDelayNanoseconds: UInt64
     let wakeRecoveryDelayNanoseconds: UInt64
+    let playbackActivityProbeBuilder:
+        (any AudioPlaybackActivityProbeBuilding)?
+    let livenessPolicy: AudioCaptureLivenessPolicy
+    let livenessUptimeNanoseconds: @Sendable () -> UInt64
+
+    init(
+        processCatalog: any AudioProcessCatalog,
+        preflight: any AudioCapturePreflighting,
+        pipelineBuilder: any AudioCapturePipelineBuilding,
+        routeMonitor: any AudioOutputRouteMonitoring,
+        routeStabilityGate: any AudioOutputRouteStabilityChecking,
+        callbackHealthMonitorBuilder: any AudioCallbackHealthMonitorBuilding,
+        permissionExplanationRequest: @escaping @MainActor () async -> Bool,
+        routeRecoveryDelayNanoseconds: UInt64,
+        wakeRecoveryDelayNanoseconds: UInt64,
+        playbackActivityProbeBuilder:
+            (any AudioPlaybackActivityProbeBuilding)? = nil,
+        livenessPolicy: AudioCaptureLivenessPolicy = .production,
+        livenessUptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        }
+    ) {
+        self.processCatalog = processCatalog
+        self.preflight = preflight
+        self.pipelineBuilder = pipelineBuilder
+        self.routeMonitor = routeMonitor
+        self.routeStabilityGate = routeStabilityGate
+        self.callbackHealthMonitorBuilder = callbackHealthMonitorBuilder
+        self.permissionExplanationRequest = permissionExplanationRequest
+        self.routeRecoveryDelayNanoseconds = routeRecoveryDelayNanoseconds
+        self.wakeRecoveryDelayNanoseconds = wakeRecoveryDelayNanoseconds
+        self.playbackActivityProbeBuilder = playbackActivityProbeBuilder
+        self.livenessPolicy = livenessPolicy
+        self.livenessUptimeNanoseconds = livenessUptimeNanoseconds
+    }
 
     @available(macOS 14.2, *)
     @MainActor
@@ -52,7 +87,8 @@ struct AudioCaptureDependencies {
             ),
             permissionExplanationRequest: permissionExplanationRequest,
             routeRecoveryDelayNanoseconds: 350_000_000,
-            wakeRecoveryDelayNanoseconds: 1_000_000_000
+            wakeRecoveryDelayNanoseconds: 1_000_000_000,
+            playbackActivityProbeBuilder: CoreAudioPlaybackActivityProbeBuilder()
         )
     }
 }

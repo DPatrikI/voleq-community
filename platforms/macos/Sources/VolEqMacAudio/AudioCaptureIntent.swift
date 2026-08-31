@@ -76,6 +76,7 @@ enum AudioRecoveryReason: Equatable, Sendable {
     case systemWake
     case stalledCallbacks
     case userRetry
+    case confirmedUnusableCapture
 }
 
 enum RecoveryFailure: Error, Equatable, Sendable {

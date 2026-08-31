@@ -144,7 +144,8 @@ final class AudioCapturePipelineExecutor: @unchecked Sendable {
 final class AudioCaptureRuntime {
     private let pipelineBuilder: any AudioCapturePipelineBuilding
     private let healthMonitorBuilder: any AudioCallbackHealthMonitorBuilding
-    private let diagnosticsMonitor = AudioCaptureDiagnosticsMonitor()
+    private let livenessMonitor: AudioCaptureLivenessMonitor
+    private let processingMonitor = AudioCaptureProcessingMonitor()
     private let pipelineExecutor: AudioCapturePipelineExecutor
 
     private var pipeline: (any AudioCapturePipeline)?
@@ -165,11 +166,22 @@ final class AudioCaptureRuntime {
     init(
         pipelineBuilder: any AudioCapturePipelineBuilding,
         healthMonitorBuilder: any AudioCallbackHealthMonitorBuilding,
+        playbackActivityProbeBuilder:
+            (any AudioPlaybackActivityProbeBuilding)? = nil,
+        livenessPolicy: AudioCaptureLivenessPolicy = .production,
+        livenessUptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        },
         pipelineExecutor: AudioCapturePipelineExecutor = AudioCapturePipelineExecutor()
     ) {
         self.pipelineBuilder = pipelineBuilder
         self.healthMonitorBuilder = healthMonitorBuilder
         self.pipelineExecutor = pipelineExecutor
+        livenessMonitor = AudioCaptureLivenessMonitor(
+            playbackActivityProbeBuilder: playbackActivityProbeBuilder,
+            policy: livenessPolicy,
+            uptimeNanoseconds: livenessUptimeNanoseconds
+        )
     }
 
     var isIdle: Bool {
@@ -192,6 +204,9 @@ final class AudioCaptureRuntime {
         onStall: @escaping @MainActor () -> Void,
         onStatus: @escaping @MainActor (String) -> Void,
         onProcessingFailure: @escaping @MainActor (OSStatus) -> Void,
+        onConfirmedStaleCapture: @escaping @MainActor () -> Void = {},
+        automaticLivenessRecoveryEnabled: Bool = false,
+        resetAutomaticRecoveryCircuitBreaker: Bool = false,
         runningStatus: String
     ) async -> AudioCaptureRuntimeStartResult {
         guard pipeline == nil, buildOperation == nil, startOperation == nil else {
@@ -269,7 +284,18 @@ final class AudioCaptureRuntime {
                     },
                     onStall: onStall
                 )
-                diagnosticsMonitor.start(
+                livenessMonitor.start(
+                    pipeline: builtPipeline,
+                    automaticRecoveryEnabled:
+                        automaticLivenessRecoveryEnabled,
+                    resetAutomaticRecoveryCircuitBreaker:
+                        resetAutomaticRecoveryCircuitBreaker,
+                    isCurrent: { [weak self] candidate in
+                        self?.pipeline === candidate
+                    },
+                    onConfirmedStaleCapture: onConfirmedStaleCapture
+                )
+                processingMonitor.start(
                     pipeline: builtPipeline,
                     runningStatus: runningStatus,
                     isCurrent: { [weak self] candidate in
@@ -286,7 +312,8 @@ final class AudioCaptureRuntime {
     func teardown() async -> AudioCaptureTeardownReport {
         healthMonitor?.stop()
         healthMonitor = nil
-        diagnosticsMonitor.stop()
+        processingMonitor.stop()
+        let livenessReport = await livenessMonitor.stopAndWait()
 
         if let buildOperation {
             cancelStartup()
@@ -294,11 +321,11 @@ final class AudioCaptureRuntime {
             adoptBuildResult(buildResult, operationID: buildOperation.id)
         }
 
-        guard let currentPipeline = pipeline else { return .complete }
+        guard let currentPipeline = pipeline else { return livenessReport }
         startOperation?.lease.cancel()
         let report = await pipelineExecutor.teardown(currentPipeline)
 
-        if report.isComplete,
+        if report.permitsReplacementPipeline,
            let startOperation,
            startOperation.pipeline === currentPipeline {
             _ = await startOperation.task.value
@@ -307,8 +334,10 @@ final class AudioCaptureRuntime {
                 pipeline: currentPipeline
             )
         }
-        if pipeline === currentPipeline, report.isComplete { pipeline = nil }
-        return report
+        if pipeline === currentPipeline, report.permitsReplacementPipeline {
+            pipeline = nil
+        }
+        return report.merging(livenessReport)
     }
 
     private func adoptBuildResult(

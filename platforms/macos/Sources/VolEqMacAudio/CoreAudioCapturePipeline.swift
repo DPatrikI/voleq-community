@@ -11,6 +11,13 @@ protocol AudioCapturePipeline: AnyObject, Sendable {
     func start() throws -> UInt64
     func stop() -> AudioCaptureTeardownReport
     func updateSettings(_ settings: LevelingSettings)
+    var playbackActivityConfiguration: AudioPlaybackActivityConfiguration? { get }
+    func drainLivenessObservations() -> [AudioCaptureLivenessObservation]
+}
+
+extension AudioCapturePipeline {
+    var playbackActivityConfiguration: AudioPlaybackActivityConfiguration? { nil }
+    func drainLivenessObservations() -> [AudioCaptureLivenessObservation] { [] }
 }
 
 protocol AudioCapturePipelineBuilding: Sendable {
@@ -88,7 +95,9 @@ struct CoreAudioCapturePipelineOperations: @unchecked Sendable {
 struct CoreAudioCapturePipelineBuilder: AudioCapturePipelineBuilding {
     let operations: CoreAudioCapturePipelineOperations
 
-    init(operations: CoreAudioCapturePipelineOperations = .live) {
+    init(
+        operations: CoreAudioCapturePipelineOperations = .live
+    ) {
         self.operations = operations
     }
 
@@ -121,19 +130,26 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
     )
     private let lifecycleLock = NSLock()
     private let resources: CoreAudioCaptureResourceOwner
+    private let livenessState: AudioCaptureLivenessState
     private var storedProcessor: AudioIOProcessor?
+    private var storedPlaybackActivityConfiguration: AudioPlaybackActivityConfiguration?
     let heartbeat: AudioCallbackHeartbeat
 
     var processor: AudioIOProcessor? {
         lifecycleLock.withLock { storedProcessor }
     }
 
+    var playbackActivityConfiguration: AudioPlaybackActivityConfiguration? {
+        lifecycleLock.withLock { storedPlaybackActivityConfiguration }
+    }
+
     private init(
         operations: CoreAudioCapturePipelineOperations,
         heartbeat: AudioCallbackHeartbeat
-    ) {
+    ) throws {
         self.operations = operations
         self.heartbeat = heartbeat
+        livenessState = try AudioCaptureLivenessState()
         resources = CoreAudioCaptureResourceOwner(
             operations: operations,
             routeQueue: routeQueue
@@ -145,7 +161,7 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         operations: CoreAudioCapturePipelineOperations,
         onRouteChange: @escaping @MainActor @Sendable () -> Void
     ) throws -> CoreAudioCapturePipeline {
-        let pipeline = CoreAudioCapturePipeline(
+        let pipeline = try CoreAudioCapturePipeline(
             operations: operations,
             heartbeat: try AudioCallbackHeartbeat()
         )
@@ -187,12 +203,17 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
                 "The output route changed during startup. Processing did not start, and original audio remains unchanged. Try again on the current output."
             )
         }
+        lifecycleLock.withLock {
+            storedPlaybackActivityConfiguration = AudioPlaybackActivityConfiguration(
+                captureTarget: request.captureTarget,
+                outputDeviceUID: request.outputDeviceUID
+            )
+        }
 
         try installOutputListeners(
             deviceID: outputDeviceID,
             onRouteChange: onRouteChange
         )
-
         let tapDescription = CATapDescription()
         tapDescription.name = "VolEq Capture"
         tapDescription.isPrivate = true
@@ -292,14 +313,15 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
                 &ioProcID,
                 aggregateDeviceID,
                 ioQueue
-            ) { [heartbeat] _, inputData, inputTime, outputData, outputTime in
+            ) { [heartbeat, livenessState] _, inputData, inputTime, outputData, outputTime in
                 heartbeat.recordCallback()
-                processor.process(
+                let metadata = processor.processWithLivenessObservation(
                     input: inputData,
                     inputTime: inputTime.pointee,
                     output: outputData,
                     outputTime: outputTime.pointee
                 )
+                livenessState.record(metadata)
             },
             "Create audio processing callback"
         )
@@ -321,6 +343,10 @@ final class CoreAudioCapturePipeline: AudioCapturePipeline, @unchecked Sendable 
         lifecycleLock.withLock {
             storedProcessor?.updateSettings(settings)
         }
+    }
+
+    func drainLivenessObservations() -> [AudioCaptureLivenessObservation] {
+        livenessState.drain()
     }
 
     var runningStatusSuffix: String {

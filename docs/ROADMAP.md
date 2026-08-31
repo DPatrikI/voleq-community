@@ -31,6 +31,8 @@ separate in [VALIDATION.md](VALIDATION.md).
   rebuild only after a stable output route and fresh target validation.
 - [x] Add callback-progress monitoring and route sleep, wake, output changes,
   and stalls through one serialized recovery coordinator.
+- [x] Add independently confirmed device-wide recovery when callbacks continue
+  but the active capture path remains exact-zero after playback resumes.
 - [x] Preserve application identity, device-wide intent, processing settings,
   cancellation, and fail-safe retry behavior through deterministic tests.
 - [ ] Complete signed-bundle owner validation for sleep/wake, permission,

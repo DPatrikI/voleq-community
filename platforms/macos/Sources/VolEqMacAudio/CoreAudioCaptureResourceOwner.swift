@@ -317,7 +317,9 @@ final class CoreAudioCaptureResourceOwner: @unchecked Sendable {
                     activeOutputListener
                 )
                 : injectedStatus
-            if status != noErr { unresolvedAddresses.append(address) }
+            if status != noErr {
+                unresolvedAddresses.append(address)
+            }
         }
         activeOutputListenerAddresses = unresolvedAddresses
         guard unresolvedAddresses.isEmpty else { return false }

@@ -1,9 +1,11 @@
 # Compatibility
 
 VolEq 0.1.1 is prepared for Apple Silicon and requires macOS 14.2 or newer. The
-minimum version is an implementation requirement. Signed-bundle and owner-run
-0.1.1 validation remain pending; the matrix below is retained 0.1.0 evidence and
-must not be read as validation of the 0.1.1 release candidate.
+minimum version is an implementation requirement. Owner-run pre-release use has
+covered M1 and M4 MacBook Pros, long device-wide sessions, YouTube playback, a
+Slack call, Sennheiser HDB 630 microphone-active transitions, and automatic
+output-route reconstruction. Final signed-bundle validation remains a release
+gate; the broader matrix below is retained v0.1.0 evidence.
 
 ## Retained physical v0.1.0 matrix
 
@@ -26,8 +28,7 @@ presentation, keyboard and accessibility states, route switching, captured
 process disappearance, stop/quit, and original-audio restoration were
 exercised. The longest uninterrupted
 session exceeded eight hours. These owner-run checks produced the expected
-audio and lifecycle behavior without observed robotic artifacts, unintended
-music amplification, clicks, or dropouts.
+audio and lifecycle behavior across the tested matrix.
 
 Private meeting recordings are not stored in this repository. Permission
 denial/recovery and sleep/wake are excluded from the retained v0.1.0 evidence;
@@ -56,6 +57,9 @@ coverage is not physical compatibility evidence.
   original audio path, validate the new route and rebuild the processing path.
   If Core Audio refuses cleanup, VolEq retains ownership and requires Quit
   rather than claiming restoration.
+- Device-wide leveling reconstructs the graph after an independent local
+  playback watcher confirms that callbacks are progressing while the main
+  capture remains exact-zero after playback resumes.
 - Sleep/wake and output-route reconstruction can fail safely rather than resume.
   The 0.1.1 behavior remains pending signed-bundle owner testing.
 - Only processes currently producing audio appear in application capture.

@@ -4,6 +4,12 @@ VolEq processes captured application or device audio locally on the Mac. The
 open-source application does not record captured audio, write it to disk, upload
 it, send it to an online service, or use it for telemetry.
 
+Device-wide recovery keeps a fixed-size, preallocated in-memory state containing
+only callback sequence numbers, frame counts, an aggregate peak value, and
+delivery flags. A temporary local playback-activity watcher uses the same
+metadata-only signal test to confirm a stale capture path, and its resources are
+released before the processing graph is rebuilt.
+
 Before the first processing attempt, VolEq explains why System Audio Recording
 access is needed and that captured audio remains local and in memory. Continue
 then starts the real Core Audio pipeline, which is what causes macOS to present

@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #include "VolEqRealtime.h"
+#include "VolEqRealtimeAtomicSupport.h"
 
-#include <stdatomic.h>
-#include <stdint.h>
 #include <stdlib.h>
-
-_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "VolEq requires lock-free atomic counters");
-_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "VolEq requires lock-free atomic heartbeats");
-_Static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "VolEq requires lock-free atomic latches");
 
 struct VolEqRealtimeContentState {
     float *samples;
@@ -16,10 +11,6 @@ struct VolEqRealtimeContentState {
     _Atomic size_t read_index;
     _Atomic size_t write_index;
     _Atomic bool speech_authorized;
-};
-
-struct VolEqRealtimeHeartbeat {
-    _Atomic unsigned long long callback_count;
 };
 
 VolEqRealtimeContentState *voleq_realtime_content_state_create(size_t capacity) {
@@ -143,43 +134,5 @@ bool voleq_realtime_content_state_is_speech_authorized(
     return atomic_load_explicit(
         &state->speech_authorized,
         memory_order_acquire
-    );
-}
-
-VolEqRealtimeHeartbeat *voleq_realtime_heartbeat_create(void) {
-    VolEqRealtimeHeartbeat *heartbeat = malloc(sizeof(*heartbeat));
-    if (heartbeat == NULL) {
-        return NULL;
-    }
-    atomic_init(&heartbeat->callback_count, 0);
-    return heartbeat;
-}
-
-void voleq_realtime_heartbeat_destroy(VolEqRealtimeHeartbeat *heartbeat) {
-    free(heartbeat);
-}
-
-void voleq_realtime_heartbeat_record_callback(
-    VolEqRealtimeHeartbeat *heartbeat
-) {
-    if (heartbeat == NULL) {
-        return;
-    }
-    atomic_fetch_add_explicit(
-        &heartbeat->callback_count,
-        1,
-        memory_order_relaxed
-    );
-}
-
-uint64_t voleq_realtime_heartbeat_callback_count(
-    const VolEqRealtimeHeartbeat *heartbeat
-) {
-    if (heartbeat == NULL) {
-        return 0;
-    }
-    return (uint64_t)atomic_load_explicit(
-        &heartbeat->callback_count,
-        memory_order_relaxed
     );
 }

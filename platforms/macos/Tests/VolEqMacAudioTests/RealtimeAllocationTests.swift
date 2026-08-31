@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import CVolEqRealtimeTestSupport
+import CVolEqRealtime
 import AudioToolbox
 import XCTest
 import VolEqCore
@@ -18,6 +19,140 @@ final class RealtimeAllocationTests: XCTestCase {
 
         XCTAssertEqual(allocationCount, 0)
         XCTAssertEqual(heartbeat.callbackCount, 1)
+    }
+
+    func testLivenessPublicationIsAllocationFree() throws {
+        let liveness = try AudioCaptureLivenessState(capacity: 8)
+        let metadata = AudioCaptureLivenessMetadata(
+            inputFrameCount: 512,
+            outputFrameCount: 512,
+            capturedPeak: 0,
+            flags: UInt32(VOLEQ_LIVENESS_FLAG_ALL_ZERO)
+                | UInt32(VOLEQ_LIVENESS_FLAG_OUTPUT_REQUEST_ACTIVE)
+        )
+
+        voleq_test_allocation_tracking_begin()
+        liveness.record(metadata)
+        let allocationCount = voleq_test_allocation_tracking_end()
+
+        XCTAssertEqual(allocationCount, 0)
+        XCTAssertEqual(liveness.drain().count, 1)
+    }
+
+    func testLivenessStorageIsBoundedToItsPreallocatedCapacity() throws {
+        let liveness = try AudioCaptureLivenessState(capacity: 2)
+        let metadata = AudioCaptureLivenessMetadata(
+            inputFrameCount: 512,
+            outputFrameCount: 512,
+            capturedPeak: 0,
+            flags: UInt32(VOLEQ_LIVENESS_FLAG_ALL_ZERO)
+                | UInt32(VOLEQ_LIVENESS_FLAG_OUTPUT_REQUEST_ACTIVE)
+        )
+
+        liveness.record(metadata)
+        liveness.record(metadata)
+        liveness.record(metadata)
+
+        XCTAssertEqual(
+            liveness.drain().map(\.callbackSequence),
+            [1, 2]
+        )
+        XCTAssertTrue(liveness.drain().isEmpty)
+
+        liveness.record(metadata)
+        XCTAssertEqual(liveness.drain().map(\.callbackSequence), [4])
+    }
+
+    func testLivenessObservationContainsScalarMetadataOnly() {
+        let observation = AudioCaptureLivenessObservation(
+            callbackSequence: 1,
+            capturedFrameCount: 512,
+            requestedOutputFrameCount: 512,
+            capturedPeak: 0,
+            allZero: true,
+            noCapturedFrames: false,
+            partialDelivery: false,
+            nonfiniteInput: false,
+            outputRequestActive: true
+        )
+
+        XCTAssertEqual(
+            Set(Mirror(reflecting: observation).children.compactMap(\.label)),
+            [
+                "callbackSequence",
+                "capturedFrameCount",
+                "requestedOutputFrameCount",
+                "capturedPeak",
+                "allZero",
+                "noCapturedFrames",
+                "partialDelivery",
+                "nonfiniteInput",
+                "outputRequestActive",
+            ]
+        )
+    }
+
+    func testLivenessAwareDirectCallbackIsAllocationFree() throws {
+        let format = floatFormat(sampleRate: 48_000)
+        let processor = try AudioIOProcessor(
+            inputFormat: format,
+            outputFormat: format,
+            settings: neutralSettings(),
+            speechAwarenessEnabled: false
+        )
+        let frameCount = 512
+        var input = [Float](repeating: 0, count: frameCount * 2)
+        var output = [Float](repeating: 0, count: frameCount * 2)
+        let allocationCount = input.withUnsafeMutableBytes { inputBytes in
+            output.withUnsafeMutableBytes { outputBytes in
+                var inputList = AudioBufferList(
+                    mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(
+                        mNumberChannels: 2,
+                        mDataByteSize: UInt32(inputBytes.count),
+                        mData: inputBytes.baseAddress
+                    )
+                )
+                var outputList = AudioBufferList(
+                    mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(
+                        mNumberChannels: 2,
+                        mDataByteSize: UInt32(outputBytes.count),
+                        mData: outputBytes.baseAddress
+                    )
+                )
+                voleq_test_allocation_tracking_begin()
+                _ = processor.processWithLivenessObservation(
+                    input: &inputList,
+                    output: &outputList
+                )
+                return voleq_test_allocation_tracking_end()
+            }
+        }
+
+        XCTAssertEqual(allocationCount, 0)
+    }
+
+    func testPlaybackActivityObservationIsAllocationFree() throws {
+        let latch = try AudioPlaybackSignalLatch()
+        let frameCount = 512
+        var input = [Float](repeating: 0.125, count: frameCount * 2)
+        let allocationCount = input.withUnsafeMutableBytes { inputBytes in
+            var inputList = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: 2,
+                    mDataByteSize: UInt32(inputBytes.count),
+                    mData: inputBytes.baseAddress
+                )
+            )
+            voleq_test_allocation_tracking_begin()
+            latch._testOnlyObserve(&inputList)
+            return voleq_test_allocation_tracking_end()
+        }
+
+        XCTAssertEqual(allocationCount, 0)
+        XCTAssertEqual(latch.qualifyingCallbackCount, 1)
     }
 
     func testFirstAndWarmedStereoProcessingAreAllocationFree() throws {
@@ -158,7 +293,7 @@ final class RealtimeAllocationTests: XCTestCase {
         XCTAssertNil(processor.takePendingFailure())
     }
 
-    func testContendedFailurePublicationSkipsLockAndRetriesWithoutConstruction() throws {
+    func testFailurePublicationIsAllocationFreeAndReportedOnce() throws {
         let recorder = StereoFactoryRecorder()
         let format = floatFormat(sampleRate: 48_000)
         let processor = try AudioIOProcessor(
@@ -172,14 +307,13 @@ final class RealtimeAllocationTests: XCTestCase {
         )
         XCTAssertEqual(recorder.sampleRates, [48_000, 48_000])
 
-        let allocationCount = processor._testOnlyWithFailureLockHeld {
-            processAllocationCount(processor: processor)
-        }
+        let allocationCount = processAllocationCount(processor: processor)
 
         XCTAssertEqual(allocationCount, 0)
+        XCTAssertEqual(processor.takePendingFailure(), speechAnalysisFailed)
         XCTAssertNil(processor.takePendingFailure())
         XCTAssertEqual(processAllocationCount(processor: processor), 0)
-        XCTAssertEqual(processor.takePendingFailure(), speechAnalysisFailed)
+        XCTAssertNil(processor.takePendingFailure())
         XCTAssertEqual(recorder.sampleRates, [48_000, 48_000])
     }
 
