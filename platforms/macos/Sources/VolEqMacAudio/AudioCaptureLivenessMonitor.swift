@@ -23,7 +23,8 @@ final class AudioCaptureLivenessMonitor {
         case active(
             id: UInt64,
             task: Task<Void, Never>,
-            probe: (any AudioPlaybackActivityProbing)?
+            probe: (any AudioPlaybackActivityProbing)?,
+            cancellationRequested: Bool
         )
         case retainedAfterCleanupFailure(
             probe: any AudioPlaybackActivityProbing,
@@ -129,15 +130,7 @@ final class AudioCaptureLivenessMonitor {
         monitorTask?.cancel()
         monitorTask = nil
 
-        let pendingWatcher: Task<Void, Never>?
-        switch watcherOwnership {
-        case .idle, .retainedAfterCleanupFailure:
-            pendingWatcher = nil
-        case let .active(_, task, probe):
-            task.cancel()
-            probe?.cancel()
-            pendingWatcher = task
-        }
+        let pendingWatcher = requestActiveWatcherCancellation()
         if let pendingWatcher { await pendingWatcher.value }
 
         activePipeline = nil
@@ -204,7 +197,12 @@ final class AudioCaptureLivenessMonitor {
                 builder: playbackActivityProbeBuilder
             )
         }
-        watcherOwnership = .active(id: watcherID, task: task, probe: nil)
+        watcherOwnership = .active(
+            id: watcherID,
+            task: task,
+            probe: nil,
+            cancellationRequested: false
+        )
         return true
     }
 
@@ -263,17 +261,47 @@ final class AudioCaptureLivenessMonitor {
         probe: any AudioPlaybackActivityProbing,
         toWatcher id: UInt64
     ) -> Bool {
-        guard case let .active(activeID, task, nil) = watcherOwnership,
+        guard case let .active(
+            activeID,
+            task,
+            nil,
+            cancellationRequested
+        ) = watcherOwnership,
               activeID == id
         else { return false }
-        watcherOwnership = .active(id: id, task: task, probe: probe)
+        watcherOwnership = .active(
+            id: id,
+            task: task,
+            probe: probe,
+            cancellationRequested: cancellationRequested
+        )
+        if cancellationRequested {
+            probe.cancel()
+        }
         return true
     }
 
     private func cancelActiveWatcher() {
-        guard case let .active(_, task, probe) = watcherOwnership else { return }
+        _ = requestActiveWatcherCancellation()
+    }
+
+    private func requestActiveWatcherCancellation() -> Task<Void, Never>? {
+        guard case let .active(
+            id,
+            task,
+            probe,
+            cancellationRequested
+        ) = watcherOwnership else { return nil }
+        guard !cancellationRequested else { return task }
+        watcherOwnership = .active(
+            id: id,
+            task: task,
+            probe: probe,
+            cancellationRequested: true
+        )
         task.cancel()
         probe?.cancel()
+        return task
     }
 
     private func retainFailedWatcher(
@@ -281,7 +309,7 @@ final class AudioCaptureLivenessMonitor {
         probe: any AudioPlaybackActivityProbing,
         steps: [AudioCaptureTeardownStep]
     ) {
-        guard case let .active(activeID, _, _) = watcherOwnership,
+        guard case let .active(activeID, _, _, _) = watcherOwnership,
               activeID == id
         else { return }
         watcherOwnership = .retainedAfterCleanupFailure(
@@ -295,7 +323,7 @@ final class AudioCaptureLivenessMonitor {
         pipeline: any AudioCapturePipeline,
         rearmCurrentZeroRun: Bool
     ) {
-        guard case let .active(activeID, _, _) = watcherOwnership,
+        guard case let .active(activeID, _, _, _) = watcherOwnership,
               activeID == id
         else { return }
         watcherOwnership = .idle
