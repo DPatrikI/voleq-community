@@ -94,6 +94,7 @@ let package = Package(
                 "VolEqDSP",
                 "VolEqSpeech",
                 "VolEqMacAudio",
+                "CVolEqRealtime",
                 "CVolEqRealtimeTestSupport"
             ],
             path: "platforms/macos/Tests/VolEqMacAudioTests"

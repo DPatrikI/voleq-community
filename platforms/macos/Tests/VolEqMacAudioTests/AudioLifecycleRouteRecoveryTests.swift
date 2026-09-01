@@ -228,6 +228,31 @@ final class AudioLifecycleRouteRecoveryTests: XCTestCase {
         XCTAssertEqual(rig.pipelines.pipelines.count, 2)
     }
 
+    func testRouteRecoveryContinuesWhenOnlyOldGenerationListenersRemain() async throws {
+        let rig = AudioCaptureTestRig()
+        let controller = rig.makeController()
+        controller.mode = .system
+        controller.start()
+        await waitForRuntimeState(controller, .active)
+        let first = try XCTUnwrap(rig.pipelines.pipelines.first)
+        first.teardownReport = AudioCaptureTeardownReport(
+            unresolvedSteps: [.activeOutputListeners]
+        )
+
+        rig.pipelines.triggerRouteChange()
+        try await waitForAudioCondition("listener-quarantined replacement") {
+            rig.pipelines.pipelines.count == 2
+                && controller.runtimeState == .active
+        }
+
+        XCTAssertEqual(first.stopCount, 1)
+        XCTAssertEqual(controller.runtimeState, .active)
+        XCTAssertNotEqual(
+            controller.systemAudioAccessState,
+            .actionRequired(.cleanupFailed)
+        )
+    }
+
     func testRouteRecoveryUsesSettingsChangedAfterActivation() async throws {
         let rig = AudioCaptureTestRig()
         let controller = rig.makeController()

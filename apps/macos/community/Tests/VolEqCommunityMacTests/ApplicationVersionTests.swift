@@ -104,7 +104,7 @@ final class ApplicationVersionTests: XCTestCase {
 
         XCTAssertEqual(
             try ApplicationVersion(installedVersionString: value).description,
-            "0.1.0"
+            "0.1.1"
         )
         XCTAssertEqual(info["CFBundleDisplayName"] as? String, "VolEq")
         XCTAssertEqual(info["CFBundleName"] as? String, "VolEq")

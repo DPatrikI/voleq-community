@@ -34,11 +34,13 @@ if [[ -n "$ARTIFACT_SUFFIX" && ! "$ARTIFACT_SUFFIX" =~ '^[A-Za-z0-9][A-Za-z0-9.-
     fail "VOLEQ_RELEASE_SUFFIX must contain only letters, numbers, periods, and hyphens"
 fi
 
-ARTIFACT_LABEL="$VOLEQ_COMMUNITY_ARTIFACT_PREFIX-$VERSION"
-if [[ -n "$ARTIFACT_SUFFIX" ]]; then
-    ARTIFACT_LABEL="$ARTIFACT_LABEL-$ARTIFACT_SUFFIX"
-fi
-DMG="$RELEASE_DIRECTORY/$ARTIFACT_LABEL-macOS-arm64.dmg"
+DMG_FILENAME="$(
+    voleq_release_dmg_filename \
+        "$VOLEQ_COMMUNITY_ARTIFACT_PREFIX" \
+        "$VERSION" \
+        "$ARTIFACT_SUFFIX"
+)"
+DMG="$RELEASE_DIRECTORY/$DMG_FILENAME"
 CHECKSUMS="$RELEASE_DIRECTORY/SHA256SUMS.txt"
 
 # A failed rerun must not leave an older candidate at the documented publish
@@ -74,8 +76,18 @@ security find-identity -v -p codesigning \
     || fail "Developer ID Application identity is not available in the current keychain"
 
 WORK_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/voleq-release.XXXXXX")"
+PACKAGE_SUCCEEDED=false
 cleanup() {
-    rm -rf "$WORK_DIRECTORY"
+    local exit_status=$?
+    if ! voleq_cleanup_release_attempt \
+        "$RELEASE_DIRECTORY" \
+        "$DMG" \
+        "$CHECKSUMS" \
+        "$PACKAGE_SUCCEEDED" \
+        "$WORK_DIRECTORY"; then
+        print -u2 -- "warning: release cleanup was incomplete"
+    fi
+    return "$exit_status"
 }
 trap cleanup EXIT
 
@@ -97,7 +109,7 @@ voleq_validate_product_plist "$APP/Contents/Info.plist" distribution \
     || fail "release application identity is invalid"
 ARCHITECTURES="$(lipo -archs "$EXECUTABLE")"
 [[ "$ARCHITECTURES" == "arm64" ]] \
-    || fail "v0.1.0 must contain exactly the arm64 architecture; found: $ARCHITECTURES"
+    || fail "release must contain exactly the arm64 architecture; found: $ARCHITECTURES"
 
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$EXECUTABLE"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
@@ -190,6 +202,7 @@ spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG
     shasum -a 256 --check "${CHECKSUMS:t}"
 )
 
+PACKAGE_SUCCEEDED=true
 echo "Packaged VolEq $VERSION ($BUILD) from the Community repository"
 echo "Source commit: $SOURCE_COMMIT"
 echo "Bundle identifier: $BUNDLE_IDENTIFIER"

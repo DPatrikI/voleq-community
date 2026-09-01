@@ -44,7 +44,12 @@ final class AudioCaptureLifecycleCoordinator {
         )
         captureRuntime = AudioCaptureRuntime(
             pipelineBuilder: dependencies.pipelineBuilder,
-            healthMonitorBuilder: dependencies.callbackHealthMonitorBuilder
+            healthMonitorBuilder: dependencies.callbackHealthMonitorBuilder,
+            playbackActivityProbeBuilder:
+                dependencies.playbackActivityProbeBuilder,
+            livenessPolicy: dependencies.livenessPolicy,
+            livenessUptimeNanoseconds:
+                dependencies.livenessUptimeNanoseconds
         )
         routeMonitorBootstrap.start { [weak self] in
             guard let self else { throw CancellationError() }
@@ -417,6 +422,13 @@ final class AudioCaptureLifecycleCoordinator {
             onProcessingFailure: { [weak self] statusCode in
                 self?.handleProcessingFailure(statusCode)
             },
+            onConfirmedStaleCapture: { [weak self] in
+                self?.handleConfirmedStaleCapture()
+            },
+            automaticLivenessRecoveryEnabled:
+                request.intent.mode == .system
+                    && dependencies.playbackActivityProbeBuilder != nil,
+            resetAutomaticRecoveryCircuitBreaker: !isRecovery,
             runningStatus: status
         )
         guard isCurrent(operationGeneration) else { return }
@@ -440,7 +452,7 @@ final class AudioCaptureLifecycleCoordinator {
                 status: "Stopping Leveling — original audio is being restored."
             )
             let report = await teardownOwnedResources()
-            if report.isComplete {
+            if report.permitsReplacementPipeline {
                 let failure = AudioCaptureFailurePresentation.startFailure(
                     error,
                     intent: request.intent,
@@ -467,7 +479,7 @@ final class AudioCaptureLifecycleCoordinator {
             status: "Stopping Leveling — original audio is being restored."
         )
         let report = await teardownOwnedResources()
-        guard report.isComplete else {
+        guard report.permitsReplacementPipeline else {
             applyTeardownFailure()
             return
         }
@@ -700,6 +712,18 @@ final class AudioCaptureLifecycleCoordinator {
         beginAutomaticRecovery(intent: intent, reason: reason)
     }
 
+    private func handleConfirmedStaleCapture() {
+        guard case let .recover(intent, reason) = CaptureLifecycleReducer.reduce(
+            phase: phase,
+            event: .staleCaptureConfirmed
+        ) else { return }
+        _ = apply(
+            event: .staleCaptureConfirmed,
+            status: "A stale captured-audio path was confirmed. Restoring original audio before reconnecting once."
+        )
+        beginAutomaticRecovery(intent: intent, reason: reason)
+    }
+
     private func routeChangeRequiresRecovery() async -> Bool {
         guard let activeRouteObservation else { return true }
         do {
@@ -754,7 +778,7 @@ final class AudioCaptureLifecycleCoordinator {
             let report = await teardownOwnedResources()
             guard operationGeneration == generation else { return }
             transitionTask = nil
-            guard report.isComplete else {
+            guard report.permitsReplacementPipeline else {
                 applyTeardownFailure()
                 return
             }

@@ -1,11 +1,13 @@
 # Compatibility
 
-VolEq 0.1.0—published with the earlier **VolEq Community** application name—is
-distributed for Apple Silicon and requires macOS 14.2 or newer. The minimum
-version is an implementation requirement; the physical release matrix below
-records the systems that were actually exercised.
+VolEq 0.1.1 is prepared for Apple Silicon and requires macOS 14.2 or newer. The
+minimum version is an implementation requirement. Owner-run pre-release use has
+covered M1 and M4 MacBook Pros, long device-wide sessions, YouTube playback, a
+Slack call, Sennheiser HDB 630 microphone-active transitions, and automatic
+output-route reconstruction. Final signed-bundle validation remains a release
+gate; the broader matrix below is retained v0.1.0 evidence.
 
-## Physical release matrix
+## Retained physical v0.1.0 matrix
 
 | System | Operating system | Result |
 | --- | --- | --- |
@@ -26,24 +28,15 @@ presentation, keyboard and accessibility states, route switching, captured
 process disappearance, stop/quit, and original-audio restoration were
 exercised. The longest uninterrupted
 session exceeded eight hours. These owner-run checks produced the expected
-audio and lifecycle behavior without observed robotic artifacts, unintended
-music amplification, clicks, or dropouts.
+audio and lifecycle behavior across the tested matrix.
 
-Private meeting recordings are not stored in this repository. Sleep/wake was
-also exercised during v0.1.0 validation, but it is no longer retained as
-passing evidence: the owner later reproduced a wake state where VolEq appeared
-active while its stale muting graph produced no replacement sound.
-
-The earlier v0.1.0 permission-denial and recovery claim is withdrawn. The owner
-later reproduced a denial path that could mute original audio while VolEq
-appeared active. The Unreleased 0.1.1 source keeps startup non-running until the
-real pipeline has started and callback progress is observed, but denial, grant,
-relaunch, route-recovery, sleep/wake, window/menu-bar, and
-built-in/wired/Bluetooth cases remain pending signed-bundle owner validation
-before they can be added back to the compatibility matrix. When sleep begins,
-the Unreleased source immediately leaves Active and starts teardown; wake waits
-for that cleanup and a stable route before reconstruction. It also monitors
-callback progress. Automated coverage is not physical compatibility evidence.
+Private meeting recordings are not stored in this repository. Permission
+denial/recovery and sleep/wake are excluded from the retained v0.1.0 evidence;
+the detailed defects and 0.1.1 changes are recorded in the
+[changelog](../CHANGELOG.md). Denial, grant, relaunch, route recovery,
+sleep/wake, window/menu-bar, and built-in/wired/Bluetooth cases remain pending
+signed-bundle owner validation before they can be claimed for 0.1.1. Automated
+coverage is not physical compatibility evidence.
 
 ## Audio formats and latency
 
@@ -57,15 +50,18 @@ callback progress. Automated coverage is not physical compatibility evidence.
 
 ## Boundaries
 
-- The official binary is arm64-only. Intel Macs are not supported by v0.1.0.
+- The official binary is arm64-only. Intel Macs are not supported.
 - The current processor levels the combined captured mix. It cannot identify
   meeting participants or retain a separate gain profile for each person.
 - Output changes stop processing and, after successful teardown restores the
   original audio path, validate the new route and rebuild the processing path.
   If Core Audio refuses cleanup, VolEq retains ownership and requires Quit
   rather than claiming restoration.
-- The official v0.1.0 build has a known full-system-sleep recovery defect. The
-  Unreleased replacement behavior remains pending signed-bundle owner testing.
+- Device-wide leveling reconstructs the graph after an independent local
+  playback watcher confirms that callbacks are progressing while the main
+  capture remains exact-zero after playback resumes.
+- Sleep/wake and output-route reconstruction can fail safely rather than resume.
+  The 0.1.1 behavior remains pending signed-bundle owner testing.
 - Only processes currently producing audio appear in application capture.
 - Multichannel layouts fail safely before processing begins.
 - Singing may be treated as speech and receive leveling or mild suppression.
