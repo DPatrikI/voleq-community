@@ -332,6 +332,11 @@ final class AudioCaptureLivenessMonitor {
               activePipeline === pipeline,
               let latestObservation
         else { return }
+        let retriesSameZeroRun = watcherAttemptedForZeroRun
+        watcherAttemptedForZeroRun = false
+        if retriesSameZeroRun {
+            exactZeroDeliveryBeganAt = nil
+        }
         considerWatcherStart(for: latestObservation)
     }
 

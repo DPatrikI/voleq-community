@@ -107,6 +107,63 @@ final class AudioCaptureLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(rig.pipelines.pipelines.count, 1)
     }
 
+    func testStartFailureWithOnlyQuarantinedListenerAllowsRetry() async throws {
+        let rig = AudioCaptureTestRig()
+        rig.pipelines.make = {
+            let pipeline = try TestCapturePipeline()
+            pipeline.startError = AudioCaptureTestError.unavailable
+            pipeline.teardownReport = AudioCaptureTeardownReport(
+                unresolvedSteps: [.activeOutputListeners]
+            )
+            return pipeline
+        }
+        let controller = rig.makeController()
+        controller.mode = .system
+
+        controller.start()
+        await waitForRuntimeState(controller, .failed)
+
+        XCTAssertNotEqual(
+            controller.systemAudioAccessState,
+            .actionRequired(.cleanupFailed)
+        )
+        XCTAssertEqual(rig.pipelines.pipelines.first?.stopCount, 1)
+
+        rig.pipelines.make = { try TestCapturePipeline() }
+        controller.start()
+        await waitForRuntimeState(controller, .active)
+        XCTAssertEqual(rig.pipelines.pipelines.count, 2)
+    }
+
+    func testCallbackStartupFailureWithOnlyQuarantinedListenerAllowsRetry() async throws {
+        let rig = AudioCaptureTestRig()
+        rig.healthMonitors.configure = { $0.initialProgress = false }
+        rig.pipelines.make = {
+            let pipeline = try TestCapturePipeline()
+            pipeline.teardownReport = AudioCaptureTeardownReport(
+                unresolvedSteps: [.activeOutputListeners]
+            )
+            return pipeline
+        }
+        let controller = rig.makeController()
+        controller.mode = .system
+
+        controller.start()
+        await waitForRuntimeState(controller, .failed)
+
+        XCTAssertNotEqual(
+            controller.systemAudioAccessState,
+            .actionRequired(.cleanupFailed)
+        )
+        XCTAssertEqual(rig.pipelines.pipelines.first?.stopCount, 1)
+
+        rig.healthMonitors.configure = { $0.initialProgress = true }
+        rig.pipelines.make = { try TestCapturePipeline() }
+        controller.start()
+        await waitForRuntimeState(controller, .active)
+        XCTAssertEqual(rig.pipelines.pipelines.count, 2)
+    }
+
     func testApplicationStartWithoutExplicitTargetCreatesNoAudioResources() async {
         let rig = AudioCaptureTestRig()
         let observer = TestLifecycleObserver()

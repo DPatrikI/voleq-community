@@ -452,7 +452,7 @@ final class AudioCaptureLifecycleCoordinator {
                 status: "Stopping Leveling — original audio is being restored."
             )
             let report = await teardownOwnedResources()
-            if report.isComplete {
+            if report.permitsReplacementPipeline {
                 let failure = AudioCaptureFailurePresentation.startFailure(
                     error,
                     intent: request.intent,
@@ -479,7 +479,7 @@ final class AudioCaptureLifecycleCoordinator {
             status: "Stopping Leveling — original audio is being restored."
         )
         let report = await teardownOwnedResources()
-        guard report.isComplete else {
+        guard report.permitsReplacementPipeline else {
             applyTeardownFailure()
             return
         }

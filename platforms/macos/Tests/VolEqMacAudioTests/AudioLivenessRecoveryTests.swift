@@ -165,6 +165,27 @@ private final class QueuedLivenessProbeBuilder:
     }
 }
 
+private final class FailOnceLivenessProbeBuilder:
+    AudioPlaybackActivityProbeBuilding,
+    @unchecked Sendable {
+    let probe = ControllableLivenessProbe()
+    private let lock = NSLock()
+    private var storedMakeCount = 0
+
+    var makeCount: Int { lock.withLock { storedMakeCount } }
+
+    func makeProbe(
+        configuration: AudioPlaybackActivityConfiguration
+    ) throws -> any AudioPlaybackActivityProbing {
+        let attempt = lock.withLock {
+            storedMakeCount += 1
+            return storedMakeCount
+        }
+        if attempt == 1 { throw AudioCaptureTestError.unavailable }
+        return probe
+    }
+}
+
 private final class LivenessTestPipeline:
     AudioCapturePipeline,
     @unchecked Sendable {
@@ -376,6 +397,46 @@ final class AudioLivenessRecoveryTests: AudioPipelineTestCase {
 
         XCTAssertEqual(builder.probe.verifyCount, 1)
         XCTAssertEqual(confirmations, 0)
+        let report = await monitor.stopAndWait()
+        XCTAssertTrue(report.isComplete)
+        XCTAssertEqual(builder.probe.cancelCount, 1)
+    }
+
+    func testTransientProbeConstructionFailureRearmsAfterBoundedDelay() async throws {
+        let clock = ManualLivenessClock()
+        let builder = FailOnceLivenessProbeBuilder()
+        let pipeline = try LivenessTestPipeline(observation: exactZeroObservation)
+        let monitor = AudioCaptureLivenessMonitor(
+            playbackActivityProbeBuilder: builder,
+            pollIntervalNanoseconds: 1_000_000,
+            automaticVerificationDelayNanoseconds: 2_000_000_000,
+            uptimeNanoseconds: { clock.now }
+        )
+        monitor.start(
+            pipeline: pipeline,
+            automaticRecoveryEnabled: true,
+            isCurrent: { $0 === pipeline },
+            onConfirmedStaleCapture: {}
+        )
+        try await waitForAudioCondition("initial silent observation") {
+            pipeline.drainCount > 0
+        }
+        clock.advance(2_000_000_000)
+        try await waitForAudioCondition("failed probe construction") {
+            builder.makeCount == 1
+        }
+
+        try await Task.sleep(nanoseconds: 10_000_000)
+        XCTAssertEqual(builder.makeCount, 1)
+        clock.advance(1_999_999_999)
+        try await Task.sleep(nanoseconds: 10_000_000)
+        XCTAssertEqual(builder.makeCount, 1)
+        clock.advance(1)
+        try await waitForAudioCondition("rearmed playback watcher") {
+            builder.probe.verifyCount == 1
+        }
+
+        XCTAssertEqual(builder.makeCount, 2)
         let report = await monitor.stopAndWait()
         XCTAssertTrue(report.isComplete)
         XCTAssertEqual(builder.probe.cancelCount, 1)
