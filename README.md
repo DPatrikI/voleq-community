@@ -1,12 +1,63 @@
-# VolEq — Volume Equilibrium
-
-VolEq automatically levels voice volume so quiet speakers are easier to hear
-and loud speakers are less overwhelming. It runs locally on your Mac and works
-with one audio-producing application or the complete output mix.
+<div align="center">
+  <img src="docs/assets/voleq-icon.png" width="128" height="128" alt="VolEq app icon">
+  <h1>VolEq</h1>
+  <p><strong>Automatic voice-volume leveling for your Mac.</strong></p>
+  <p>
+    Quiet speakers become easier to hear. Loud speakers stay controlled.<br>
+    Everything is processed locally, with no account, recording, or telemetry.
+  </p>
+  <p>
+    <a href="https://github.com/DPatrikI/voleq-community/releases/latest"><strong>Download</strong></a> ·
+    <a href="#features"><strong>Features</strong></a> ·
+    <a href="#privacy-by-design"><strong>Privacy</strong></a> ·
+    <a href="#build-from-source"><strong>Build</strong></a> ·
+    <a href="CONTRIBUTING.md"><strong>Contribute</strong></a>
+  </p>
+  <p>
+    <a href="https://github.com/DPatrikI/voleq-community/releases/latest"><img src="https://img.shields.io/github/v/release/DPatrikI/voleq-community?display_name=tag&amp;sort=semver&amp;style=flat-square" alt="Latest VolEq release"></a>
+    <a href="https://github.com/DPatrikI/voleq-community/actions/workflows/ci.yml"><img src="https://github.com/DPatrikI/voleq-community/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI status"></a>
+    <img src="https://img.shields.io/badge/macOS-14.2%2B-000000?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="Requires macOS 14.2 or newer">
+    <img src="https://img.shields.io/badge/Apple%20Silicon-required-6e6e73?style=flat-square" alt="Requires Apple Silicon">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MPL--2.0-4c1?style=flat-square" alt="Mozilla Public License 2.0"></a>
+  </p>
+</div>
 
 <p align="center">
-  <img src="docs/assets/voleq-window.png" width="560" alt="VolEq window showing stopped device-wide capture with speech-aware leveling enabled">
+  <img src="docs/assets/voleq-window.png" width="548" alt="VolEq window ready for device-wide capture with speech-aware leveling enabled">
 </p>
+
+## Why VolEq
+
+- **Hear voices at a steadier level.** VolEq lifts quiet speech and controls loud
+  speech, with linked-stereo leveling and lookahead peak protection.
+- **Use it where you need it.** Capture one active audio-producing application
+  or the complete device-wide output mix.
+- **Keep music sounding like music.** Speech-aware processing prevents music
+  and unrelated sounds from receiving quiet-speech gain.
+- **Stay local and private.** Audio is processed only in memory on your Mac—no
+  account, recording, telemetry, model download, or online speech service.
+- **Get a native Mac experience.** Use VolEq as a focused window or from the
+  menu bar.
+
+## Features
+
+- Raises quiet speech and controls loud speech automatically.
+- Applies automatic mild noise suppression when speech and background noise are
+  both detected.
+- Recovers conservatively across output changes, full system sleep, stalled
+  audio callbacks, and independently confirmed stale device-wide capture.
+- Fails safely when an audio format or route cannot be processed.
+- Offers native window and menu-bar presentations.
+- Checks for updates only when requested or explicitly enabled.
+
+## Privacy by design
+
+Captured audio is processed only in memory on your Mac. VolEq has no account,
+audio recording, telemetry, model download, or online speech service. Manual
+update checks—and optional checks enabled by you at most once every 24 hours
+while VolEq is open—contact the VolEq Community repository on GitHub. They send
+no audio or usage data, and VolEq never downloads or installs an update. See the
+full [privacy statement](PRIVACY.md).
 
 ## Platform support
 
@@ -16,40 +67,10 @@ with one audio-producing application or the complete output mix.
 | Windows | Planned | Not yet available |
 | Linux | Planned | Not yet available |
 
-## Download and install
-
-Download the latest Apple Silicon DMG from
-[GitHub Releases](https://github.com/DPatrikI/voleq-community/releases), open it,
-and drag **VolEq** to **Applications**. Start playback, choose an application or
-device-wide capture, select **Start**, and follow the macOS System Audio
-Recording prompt.
-
-## Features
-
-- Captures one active application or the complete device-wide output mix.
-- Raises quiet speech and controls loud speech with linked-stereo leveling and
-  lookahead peak protection.
-- Prevents music and unrelated sounds from receiving quiet-speech gain.
-- Applies automatic mild noise suppression when speech and background noise are
-  both detected.
-- Recovers conservatively across output changes, full system sleep, stalled
-  audio callbacks, and independently confirmed stale device-wide capture.
-- Offers native window and menu-bar presentations.
-
-## Local audio and update privacy
-
-Captured audio is processed only in memory on your Mac. VolEq has no account,
-audio recording, telemetry, model download, or online speech service. Manual
-update checks—and optional checks enabled by you at most once every 24 hours
-while VolEq is open—contact the VolEq Community repository on GitHub. They send
-no audio or usage data, and VolEq never downloads or installs an update. See the
-full [privacy statement](PRIVACY.md).
-
 ## Compatibility and limitations
 
-VolEq requires an **Apple Silicon Mac running macOS 14.2 or newer**. The default
-speech-aware path adds approximately **30 ms of DSP latency at 48 kHz**; device
-and route buffering can add more. See the
+The default speech-aware path adds approximately **30 ms of DSP latency** at
+48 kHz; device and route buffering can add more. See the
 [compatibility matrix](docs/COMPATIBILITY.md) for exact validation scope.
 
 - VolEq levels the combined captured mix; it cannot control each meeting
@@ -100,6 +121,8 @@ a better version of the core processor. See [EDITIONS.md](docs/EDITIONS.md).
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Release procedure](docs/RELEASING.md)
 - [Build and contribution guide](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
 - [LinkedIn](https://www.linkedin.com/in/patrik-istv%C3%A1n-d%C3%B3czy/)
 - [X — development updates and future projects](https://x.com/hapci410)
 
