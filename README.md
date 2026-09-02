@@ -23,7 +23,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/voleq-window.png" width="548" alt="VolEq window ready for device-wide capture with speech-aware leveling enabled">
+  <img src="docs/assets/voleq-window.png" width="548" alt="VolEq window stopped after device-wide capture with speech-aware leveling enabled">
 </p>
 
 ## Why VolEq
