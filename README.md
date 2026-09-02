@@ -32,8 +32,8 @@
   speech, with linked-stereo leveling and lookahead peak protection.
 - **Use it where you need it.** Capture one active audio-producing application
   or the complete device-wide output mix.
-- **Keep music sounding like music.** Speech-aware processing prevents music
-  and unrelated sounds from receiving quiet-speech gain.
+- **Boost voices, not background noise.** Speech-aware processing prevents
+  puffs, crackles, and background noise from receiving quiet-speech gain.
 - **Stay local and private.** Audio is processed only in memory on your Mac—no
   account, recording, telemetry, model download, or online speech service.
 - **Get a native Mac experience.** Use VolEq as a focused window or from the
