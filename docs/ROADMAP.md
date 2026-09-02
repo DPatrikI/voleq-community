@@ -18,8 +18,9 @@ Teams, Zoom, Google Meet in Safari, built-in and wired output, AirPods Pro 2,
 Sennheiser HDB 630, regular and microphone-active Bluetooth modes, selected
 lifecycle cases, UI/accessibility states, and sessions exceeding eight hours.
 The later reproduced sleep/wake and permission-denial failures withdraw those
-specific passing claims; their 0.1.1 replacements remain pending physical
-revalidation.
+specific v0.1.0 passing claims. A focused public 0.1.1 DMG test now covers one
+sleep/wake recovery and the documented installation and smoke-test path;
+broader replacement evidence remains explicitly scoped below.
 
 The exact tested scope and explicit non-claims are recorded in
 [COMPATIBILITY.md](COMPATIBILITY.md); automated and physical evidence remain
@@ -35,8 +36,12 @@ separate in [VALIDATION.md](VALIDATION.md).
   but the active capture path remains exact-zero after playback resumes.
 - [x] Preserve application identity, device-wide intent, processing settings,
   cancellation, and fail-safe retry behavior through deterministic tests.
-- [ ] Complete signed-bundle owner validation for sleep/wake, permission,
-  output-device, application-target, presentation, and repeated-cycle cases.
+- [x] Validate the exact public 0.1.1 DMG checksum, signed/notarized installation,
+  0.1.0 replacement flow, Start/Stop restoration, one sleep/wake cycle, both
+  presentations, current-version update result, and **No sound?** guidance.
+- [ ] Extend signed-bundle evidence to permission revocation, repeated recovery
+  cycles, output changes and application loss during sleep, VoiceOver, and the
+  broader device matrix.
 
 - [x] Add dependency-free manual checks through the latest published GitHub
   Release.
@@ -48,9 +53,10 @@ separate in [VALIDATION.md](VALIDATION.md).
   Window, Menu Bar, and Settings surfaces.
 - [x] Add deterministic version, parsing, networking, scheduling, persistence,
   concurrency, and presentation-state tests with no live GitHub dependency.
-- [ ] Complete owner-facing runtime validation for second-launch consent,
-  Window and Menu Bar presentation, VoiceOver, and offline behavior as part of
-  the 0.1.1 signed release-candidate gate.
+- [x] Validate manual current-version feedback and Window and Menu Bar access in
+  the exact public 0.1.1 artifact.
+- [ ] Extend owner-facing update evidence to second-launch consent, VoiceOver,
+  and rendered offline behavior.
 
 ## Later Community work
 
