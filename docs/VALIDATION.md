@@ -6,11 +6,31 @@ VolEq changes the audio people hear, so a green build is necessary but not suffi
 
 Automated release-branch checks cover the source tree, release build,
 development and distribution bundles, metadata, resources, and CPU benchmark.
-Developer ID signing, notarization, stapling, Gatekeeper, and an isolated DMG
-copy flow are release-candidate gates recorded outside the repository and must
-be rerun against the exact final release-PR head. Neither those gates nor the
-automated checks establish physical audio, VoiceOver, sleep/wake, or real
-upgrade behavior.
+Developer ID signing, notarization, stapling, Gatekeeper, and the isolated DMG
+copy flow passed before publication. On 2026-09-02, the owner also downloaded
+the exact public DMG and completed the focused post-release validation recorded
+below. These artifact and automated checks do not establish unperformed
+physical-device, VoiceOver, permission-transition, or extended lifecycle
+scenarios.
+
+## Published 0.1.1 DMG validation
+
+The owner downloaded `VolEq-Community-0.1.1-macOS-arm64.dmg` from the public
+GitHub Release instead of reusing a local package and confirmed:
+
+- the published SHA-256 checksum matched;
+- macOS accepted the signed and notarized application;
+- replacing the installed 0.1.0 `VolEq Community.app` with `VolEq.app` worked;
+- Start, Stop, and original-audio restoration behaved as expected;
+- a manual update check reported 0.1.1 as current;
+- one full-system sleep/wake cycle recovered correctly;
+- Window and Menu Bar presentations both worked; and
+- **No sound?** presented the expected recovery guidance.
+
+This is owner-run public-artifact validation. It is separate from automated
+evidence and does not claim VoiceOver traversal, offline-network behavior,
+permission revocation, repeated sleep/wake cycles, output changes during sleep,
+application loss during sleep, or a repeated signed-bundle device matrix.
 
 ## Product naming (0.1.1)
 
@@ -30,9 +50,11 @@ branding, property-list, resource, ad-hoc signature, version `0.1.1` / build `2`
 unchanged identity, and arm64-only checks. The canonical 48 kHz stereo benchmark
 used 2.642 seconds of thread CPU for 60 seconds of audio, or 4.40% of one core on
 MacBookPro18,3, within the 5% gate. Release metadata, artifact-name tests, local
-Markdown links, and `git diff --check` passed. Owner validation remains required
-for the Finder, Dock, application-menu, System Audio Recording, update,
-VoiceOver, physical-device, sleep/wake, and upgrade-from-0.1.0 behavior.
+Markdown links, and `git diff --check` passed. The published-DMG validation above
+now covers installation, the 0.1.0 replacement flow, current-version update
+feedback, both presentation modes, one sleep/wake cycle, and recovery guidance.
+VoiceOver and broader physical-device and lifecycle combinations remain
+separate non-claims.
 
 ## Automatic update checks (0.1.1)
 
@@ -136,10 +158,11 @@ HDB 630 microphone-active output transitions. Automatic reconstruction was
 observed after the Bluetooth/output-route transition, followed by normal
 device-wide playback. This is physical listening and lifecycle evidence for the
 tested pre-release builds. The production exact-zero confirmation path has
-deterministic evidence; final signed-bundle listening validation remains a
-release gate.
+deterministic evidence. The focused public-DMG evidence above confirms one
+sleep/wake recovery and the exercised smoke-test paths, but does not convert the
+remaining combinations below into passing claims.
 
-The remaining signed-bundle physical matrix includes:
+The unclaimed extended physical matrix includes:
 
 - application and device-wide capture;
 - active leveling followed by Apple-menu sleep and wake;

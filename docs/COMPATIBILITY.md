@@ -1,11 +1,27 @@
 # Compatibility
 
-VolEq 0.1.1 is prepared for Apple Silicon and requires macOS 14.2 or newer. The
-minimum version is an implementation requirement. Owner-run pre-release use has
+VolEq 0.1.1 is released for Apple Silicon and requires macOS 14.2 or newer. The
+minimum version is an implementation requirement. Owner-run pre-release use
 covered M1 and M4 MacBook Pros, long device-wide sessions, YouTube playback, a
 Slack call, Sennheiser HDB 630 microphone-active transitions, and automatic
-output-route reconstruction. Final signed-bundle validation remains a release
-gate; the broader matrix below is retained v0.1.0 evidence.
+output-route reconstruction. The broader device matrix below remains retained
+v0.1.0 evidence unless a row or section explicitly identifies 0.1.1 evidence.
+
+## Published 0.1.1 artifact
+
+On 2026-09-02, the owner downloaded the public
+`VolEq-Community-0.1.1-macOS-arm64.dmg` from GitHub Releases rather than reusing
+a local package. The published checksum matched, macOS accepted the signed and
+notarized application, and the documented 0.1.0-to-0.1.1 replacement flow
+installed and launched the renamed `VolEq.app` successfully.
+
+The public artifact also passed a focused smoke test covering Start, Stop,
+original-audio restoration, a manual update check reporting 0.1.1 as current,
+one full-system sleep/wake recovery, Window and Menu Bar presentations, and the
+**No sound?** recovery guidance. These checks establish the downloadable
+artifact and exercised paths; they do not extend compatibility claims to
+devices, permission transitions, repeated lifecycle cycles, or accessibility
+scenarios that were not part of this focused test.
 
 ## Retained physical v0.1.0 matrix
 
@@ -33,10 +49,12 @@ audio and lifecycle behavior across the tested matrix.
 Private meeting recordings are not stored in this repository. Permission
 denial/recovery and sleep/wake are excluded from the retained v0.1.0 evidence;
 the detailed defects and 0.1.1 changes are recorded in the
-[changelog](../CHANGELOG.md). Denial, grant, relaunch, route recovery,
-sleep/wake, window/menu-bar, and built-in/wired/Bluetooth cases remain pending
-signed-bundle owner validation before they can be claimed for 0.1.1. Automated
-coverage is not physical compatibility evidence.
+[changelog](../CHANGELOG.md). The focused public-artifact evidence above adds
+one sleep/wake cycle and both presentation modes for 0.1.1. Permission
+revocation, repeated recovery cycles, output changes during sleep, application
+loss during sleep, VoiceOver traversal, and a repeated signed-bundle device
+matrix remain unclaimed. Automated coverage is not physical compatibility
+evidence.
 
 ## Audio formats and latency
 
@@ -61,7 +79,8 @@ coverage is not physical compatibility evidence.
   playback watcher confirms that callbacks are progressing while the main
   capture remains exact-zero after playback resumes.
 - Sleep/wake and output-route reconstruction can fail safely rather than resume.
-  The 0.1.1 behavior remains pending signed-bundle owner testing.
+  One public 0.1.1 DMG sleep/wake cycle passed; broader recovery combinations
+  remain outside the published compatibility evidence.
 - Only processes currently producing audio appear in application capture.
 - Multichannel layouts fail safely before processing begins.
 - Singing may be treated as speech and receive leveling or mild suppression.

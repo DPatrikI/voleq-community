@@ -24,9 +24,6 @@ and drag **VolEq** to **Applications**. Start playback, choose an application or
 device-wide capture, select **Start**, and follow the macOS System Audio
 Recording prompt.
 
-> Upgrading from 0.1.0? Remove `VolEq Community.app` before installing
-> `VolEq.app` so macOS does not retain two copies with the same identity.
-
 ## Features
 
 - Captures one active application or the complete device-wide output mix.
