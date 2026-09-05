@@ -126,6 +126,10 @@ a better version of the core processor. See [EDITIONS.md](docs/EDITIONS.md).
 - [LinkedIn](https://www.linkedin.com/in/patrik-istv%C3%A1n-d%C3%B3czy/)
 - [X — development updates and future projects](https://x.com/hapci410)
 
+If VolEq makes your meetings easier to listen to, you can support its development
+through [GitHub Sponsors](https://github.com/sponsors/DPatrikI). Sponsorship is
+optional; VolEq remains free and open source.
+
 ## License
 
 Source and documentation are licensed under the
